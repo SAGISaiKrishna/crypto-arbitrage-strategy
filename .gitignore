@@ -1,0 +1,29 @@
+# Environment
+.env
+
+# Hardhat
+node_modules/
+cache/
+artifacts/
+dist/
+typechain-types/
+gas-report.txt
+
+# Python
+simulation/__pycache__/
+simulation/*.pyc
+simulation/.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Generated outputs (keep .gitkeep, ignore actual files)
+excel/*.csv
+charts/*.png
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

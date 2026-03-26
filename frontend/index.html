@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crypto Arbitrage Strategy — Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header>
+    <h1>Crypto Arbitrage Strategy</h1>
+    <p class="subtitle">Design and Analysis of a Crypto Arbitrage Strategy Using Perpetual Futures Hedging</p>
+    <button id="btn-connect" onclick="connectWallet()">Connect Wallet</button>
+    <span id="wallet-address" class="address"></span>
+  </header>
+
+  <nav>
+    <a href="#section-vault">Vault</a>
+    <a href="#section-hedge">Hedge</a>
+    <a href="#section-oracle">Oracle</a>
+    <a href="#section-contracts">Contracts</a>
+  </nav>
+
+  <main>
+
+    <!-- ── Oracle Section ──────────────────────────────────────────────── -->
+    <section id="section-oracle">
+      <h2>Oracle Price</h2>
+      <div class="card">
+        <div class="stat">
+          <span class="stat-label">ETH / USD</span>
+          <span class="stat-value" id="eth-price">—</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Carry Viable (3 bps/day)</span>
+          <span class="stat-value" id="carry-viable">—</span>
+        </div>
+        <button onclick="refreshOracle()">Refresh</button>
+      </div>
+    </section>
+
+    <!-- ── Vault Section ───────────────────────────────────────────────── -->
+    <section id="section-vault">
+      <h2>Vault</h2>
+
+      <div class="card">
+        <h3>State</h3>
+        <div class="stats-grid">
+          <div class="stat">
+            <span class="stat-label">Total Deposited</span>
+            <span class="stat-value" id="total-deposited">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Hedge Open</span>
+            <span class="stat-value" id="hedge-open">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Hedge Collateral</span>
+            <span class="stat-value" id="hedge-collateral">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Carry Score (bps)</span>
+            <span class="stat-value" id="carry-score">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Margin Ratio (bps)</span>
+            <span class="stat-value" id="margin-ratio">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Margin Healthy</span>
+            <span class="stat-value" id="margin-healthy">—</span>
+          </div>
+        </div>
+        <button onclick="refreshVault()">Refresh State</button>
+      </div>
+
+      <div class="card">
+        <h3>Your Position</h3>
+        <div class="stat">
+          <span class="stat-label">Your Vault Value (USDC)</span>
+          <span class="stat-value" id="user-value">—</span>
+        </div>
+        <button onclick="refreshUserValue()">Refresh</button>
+      </div>
+
+      <div class="card">
+        <h3>Deposit USDC</h3>
+        <input type="number" id="deposit-amount" placeholder="Amount in USDC" min="1" step="1" />
+        <button onclick="deposit()">Deposit</button>
+        <p class="hint">You must approve USDC spending before depositing.</p>
+        <button onclick="approveUSDC()">Approve USDC</button>
+      </div>
+
+      <div class="card">
+        <h3>Withdraw</h3>
+        <p class="hint">Withdrawals require the hedge to be closed first.</p>
+        <button onclick="withdrawAll()">Withdraw All Shares</button>
+      </div>
+    </section>
+
+    <!-- ── Hedge Section (Owner Only) ─────────────────────────────────── -->
+    <section id="section-hedge">
+      <h2>Hedge Management <span class="badge">Owner Only</span></h2>
+
+      <div class="card">
+        <h3>Open Hedge</h3>
+        <label>Notional (USDC):
+          <input type="number" id="hedge-notional" placeholder="e.g. 10000" />
+        </label>
+        <label>Collateral (USDC):
+          <input type="number" id="hedge-collateral-input" placeholder="e.g. 2000" />
+        </label>
+        <label>Daily Funding Rate (bps):
+          <input type="number" id="hedge-funding-rate" placeholder="e.g. 3" />
+        </label>
+        <button onclick="openHedge()">Open Hedge</button>
+      </div>
+
+      <div class="card">
+        <h3>Close Hedge</h3>
+        <button onclick="closeHedge()" class="danger">Close Hedge</button>
+      </div>
+    </section>
+
+    <!-- ── Contract Addresses ─────────────────────────────────────────── -->
+    <section id="section-contracts">
+      <h2>Deployed Contracts</h2>
+      <div class="card">
+        <table id="contract-table">
+          <thead><tr><th>Contract</th><th>Address</th><th>Etherscan</th></tr></thead>
+          <tbody id="contract-list">
+            <!-- Populated by app.js from CONTRACTS config -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Transaction Log ────────────────────────────────────────────── -->
+    <section id="section-log">
+      <h2>Transaction Log</h2>
+      <div class="card">
+        <ul id="tx-log">
+          <li class="hint">Transactions will appear here.</li>
+        </ul>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    <p>Crypto Arbitrage Strategy — Course Final Project | Sepolia Testnet</p>
+  </footer>
+
+  <!-- ethers.js v6 via CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

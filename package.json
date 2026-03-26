@@ -1,0 +1,32 @@
+{
+  "name": "crypto-arbitrage-strategy",
+  "version": "1.0.0",
+  "description": "Design and Analysis of a Crypto Arbitrage Strategy Using Perpetual Futures Hedging",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "test:gas": "REPORT_GAS=true hardhat test",
+    "deploy:local": "hardhat run scripts/deploy-local.ts --network localhost",
+    "deploy:sepolia": "hardhat run scripts/deploy-sepolia.ts --network sepolia",
+    "verify:sepolia": "hardhat run scripts/verify-sepolia.ts --network sepolia",
+    "interact": "hardhat run scripts/interact.ts --network localhost",
+    "node": "hardhat node",
+    "clean": "hardhat clean"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@types/chai": "^4.3.11",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.11.5",
+    "chai": "^4.4.1",
+    "hardhat": "^2.22.0",
+    "hardhat-gas-reporter": "^1.0.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.1",
+    "dotenv": "^16.4.1",
+    "ethers": "^6.10.0"
+  }
+}
