@@ -3,17 +3,34 @@ import { ethers } from "hardhat";
 /// @notice Interactive walkthrough of the full strategy lifecycle.
 ///         Prints formatted output suitable for screenshots in the submission.
 ///
-/// Assumes deploy-local.ts has already been run.
-/// Update the addresses below after running deploy-local.ts.
+/// ─── SETUP BEFORE RUNNING ────────────────────────────────────────────────────
 ///
-/// Usage:
-///   npx hardhat run scripts/interact.ts --network localhost
+/// For localhost:
+///   1. Run: npx hardhat node                            (terminal 1)
+///   2. Run: npx hardhat run scripts/deploy-local.ts --network localhost
+///   3. Copy the printed addresses into ADDRESSES below.
+///   4. Run: npx hardhat run scripts/interact.ts --network localhost
+///
+/// For Sepolia:
+///   1. Run: npx hardhat run scripts/deploy-sepolia.ts --network sepolia
+///   2. Addresses are saved to deployed-sepolia.json — copy them into ADDRESSES.
+///   3. Run: npx hardhat run scripts/interact.ts --network sepolia
+///
+/// NOTE: alice (signers[1]) needs USDC to run the deposit step.
+///   On localhost, deploy-local.ts mints 100 000 USDC to alice automatically.
+///   On Sepolia, call usdc.mint(alice.address, ...) from the deployer first,
+///   OR change alice to owner (signers[0]) who receives the initial mint.
+/// ─────────────────────────────────────────────────────────────────────────────
+
+// TODO: Replace all "0x..." values with deployed contract addresses.
+//       For localhost: copy from deploy-local.ts terminal output.
+//       For Sepolia:   copy from deployed-sepolia.json.
 const ADDRESSES = {
-  MockUSDC:        "0x...",  // TODO: fill after deploy-local.ts
-  ArbitrageToken:  "0x...",  // TODO: fill after deploy-local.ts
-  MockPriceOracle: "0x...",  // TODO: fill after deploy-local.ts
-  MockPerpEngine:  "0x...",  // TODO: fill after deploy-local.ts
-  StrategyVault:   "0x...",  // TODO: fill after deploy-local.ts
+  MockUSDC:        "0x...",  // TODO: fill with deployed MockUSDC address
+  ArbitrageToken:  "0x...",  // TODO: fill with deployed ArbitrageToken address
+  MockPriceOracle: "0x...",  // TODO: fill with deployed MockPriceOracle address (localhost only)
+  MockPerpEngine:  "0x...",  // TODO: fill with deployed MockPerpEngine address
+  StrategyVault:   "0x...",  // TODO: fill with deployed StrategyVault address
 };
 
 async function main() {

@@ -96,3 +96,45 @@ See `.env.example` for required variables:
 - `PRIVATE_KEY`
 - `SEPOLIA_RPC_URL`
 - `ETHERSCAN_API_KEY`
+
+---
+
+## Quick Start
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Compile contracts
+npx hardhat compile
+
+# 3. Run tests
+npx hardhat test
+
+# 4. Run simulation (generates CSVs + charts)
+cd simulation
+pip install -r requirements.txt
+python main.py
+cd ..
+
+# 5. Deploy to local Hardhat node (two terminals)
+npx hardhat node
+npx hardhat run scripts/deploy-local.ts --network localhost
+
+# 6. Deploy to Sepolia (fill .env first)
+npx hardhat run scripts/deploy-sepolia.ts --network sepolia
+
+# 7. Verify on Etherscan (run from same wallet as deployment)
+npx hardhat run scripts/verify-sepolia.ts --network sepolia
+
+# 8. Run interaction demo (fill ADDRESSES in scripts/interact.ts first)
+npx hardhat run scripts/interact.ts --network sepolia
+```
+
+---
+
+## Known Limitations
+
+- **Lending yield is an accounting abstraction.** In this proof-of-concept, lending yield is computed and tracked on-chain per second but is not backed by real USDC in the vault. In a production system, deposited USDC would be supplied to a protocol such as Aave, with interest funded by borrowers and returned as yield-bearing tokens.
+- **Simulation uses assumed parameters.** The Python scenario analysis uses hardcoded rates (funding, APY, volatility) rather than live market data. Results are illustrative of strategy mechanics under specific conditions, not a historical backtest.
+- **MockPerpEngine is not a real exchange.** The perpetual engine simulates position mechanics (funding accrual, mark-to-market PnL, margin ratio) but does not model order books, slippage, counterparty risk, or settlement delays.

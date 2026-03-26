@@ -21,6 +21,9 @@ venv/
 excel/*.csv
 charts/*.png
 
+# Deployment artefacts (contain no secrets but are generated files)
+deployed-sepolia.json
+
 # macOS
 .DS_Store
 
