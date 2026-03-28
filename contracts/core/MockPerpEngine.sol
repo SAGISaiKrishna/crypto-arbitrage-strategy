@@ -167,6 +167,11 @@ contract MockPerpEngine is IPerpEngine, Ownable, ReentrancyGuard {
 
         if (equity > 0) {
             netProceeds = uint256(equity);
+            // Cap to available balance — in a mock the engine has no external reserve to
+            // fund positive PnL beyond deposited collateral. A real exchange would have
+            // an insurance fund or counterparty collateral to cover this.
+            uint256 available = collateralToken.balanceOf(address(this));
+            if (netProceeds > available) netProceeds = available;
             collateralToken.safeTransfer(msg.sender, netProceeds);
         }
         // If equity <= 0: position wiped out, return 0 (simplified — no shortfall socialisation)

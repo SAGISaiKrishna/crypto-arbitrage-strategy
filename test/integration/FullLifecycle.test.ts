@@ -57,6 +57,11 @@ describe("Full Strategy Lifecycle (Integration)", () => {
     // Transfer engine ownership to vault
     await engine.transferOwnership(await vault.getAddress());
 
+    // Seed the engine with a USDC reserve so it can pay out funding income on closeShort.
+    // In a real exchange this reserve would be the insurance fund / counterparty collateral.
+    // Without it the mock caps proceeds to deposited collateral only, preventing funding payout.
+    await usdc.mint(await engine.getAddress(), 10_000n * ONE_USDC);
+
     // ── 2. Fund test users ────────────────────────────────────────────────────
     await usdc.mint(alice.address, 100_000n * ONE_USDC);
     await usdc.mint(bob.address,   100_000n * ONE_USDC);

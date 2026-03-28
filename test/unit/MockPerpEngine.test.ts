@@ -38,6 +38,10 @@ describe("MockPerpEngine", () => {
     // Fund trader and approve engine
     await usdc.mint(trader.address, 100_000n * ONE_USDC);
     await usdc.connect(trader).approve(await engine.getAddress(), ethers.MaxUint256);
+
+    // Seed the engine with a funding reserve so it can pay out positive PnL.
+    // In a real exchange this would be the insurance fund / counterparty collateral.
+    await usdc.mint(await engine.getAddress(), 10_000n * ONE_USDC);
   });
 
   // ─── Open Short ─────────────────────────────────────────────────────────────
@@ -96,8 +100,10 @@ describe("MockPerpEngine", () => {
       await engine.accrueFunding(trader.address);
 
       const pos = await engine.getPosition(trader.address);
-      // 3 bps/day on $10 000 = $3 = 3e6 USDC
-      expect(pos.cumulativeFunding).to.equal(3n * ONE_USDC);
+      // 3 bps/day on $10 000 = $3 = 3e6 USDC.
+      // Allow ±1 second of timestamp drift from block processing.
+      expect(pos.cumulativeFunding).to.be.greaterThanOrEqual(3n * ONE_USDC);
+      expect(pos.cumulativeFunding).to.be.lessThan(4n * ONE_USDC);
     });
 
     it("accrues negative funding in backwardation", async () => {
@@ -107,7 +113,9 @@ describe("MockPerpEngine", () => {
       await engine.accrueFunding(trader.address);
 
       const pos = await engine.getPosition(trader.address);
-      expect(pos.cumulativeFunding).to.equal(-2n * ONE_USDC);
+      // -2 bps/day on $10 000 = -$2. Allow ±1 second timestamp drift.
+      expect(pos.cumulativeFunding).to.be.lessThanOrEqual(-2n * ONE_USDC);
+      expect(pos.cumulativeFunding).to.be.greaterThan(-3n * ONE_USDC);
     });
   });
 

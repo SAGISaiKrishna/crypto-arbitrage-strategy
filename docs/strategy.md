@@ -17,8 +17,15 @@ The strategy is **rule-based**: it opens a hedge only when the projected annuali
 ```
 carryScore = lendingAPYBps + (dailyFundingRateBps × 365) − costBps
 
-Strategy opens  when: carryScore > minCarryThresholdBps (default: 200 bps)
-Strategy closes when: funding turns negative  OR  marginRatio < maintenanceMarginBps
+Strategy opens  when: carryScore > dynamicThreshold
+                      dynamicThreshold = costBps + (leverageRatio × riskPremiumPerUnit)
+                      e.g. 5x leverage → threshold = 50 + 5×75 = 425 bps
+
+Strategy closes when: any of:
+  1. marginRatio < safetyMarginBps (default 800 bps) — capital preservation
+  2. net unrealised loss > 10 % of collateral — capital protection
+  3. carry score at entry ≤ 0 — income stream gone
+  4. holding period > 30 days — time-based backstop
 ```
 
 **Example** (base case):

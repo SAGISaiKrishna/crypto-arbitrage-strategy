@@ -56,14 +56,31 @@ contract StrategyVault is IStrategyVault, Ownable, ReentrancyGuard {
     ///         Default: 500 bps = 5 % APY.
     uint256 public lendingAPYBps;
 
-    /// @notice Minimum annualised carry score required to open a hedge, in bps.
-    ///         Default: 200 bps (2 %). Below this the expected edge is too thin.
-    int256 public minCarryThresholdBps;
+    /// @notice Base risk premium added per unit of leverage when computing the
+    ///         dynamic carry threshold. Default: 75 bps per leverage unit.
+    ///         Example: 5x leverage → threshold = costEstimate + 5×75 = 425 bps.
+    uint256 public riskPremiumPerLeverageUnit;
 
     /// @notice Estimated round-trip cost (gas + slippage), annualised bps.
     ///         Used in carry score calculation.
     ///         Default: 50 bps.
     uint256 public costEstimateBps;
+
+    // ─── Exit Policy Parameters ───────────────────────────────────────────────
+
+    /// @notice Margin ratio (bps) below which the position is force-closed to
+    ///         avoid liquidation. Default: 800 bps (well above 500 bps liquidation).
+    uint256 public safetyMarginBps;
+
+    /// @notice Maximum number of seconds to hold an open hedge before a time-based
+    ///         exit fires. Default: 30 days.
+    uint256 public maxHoldingPeriod;
+
+    /// @notice Fraction of posted collateral that the strategy is willing to lose
+    ///         (net unrealised PnL) before the capital-protection exit fires.
+    ///         Expressed in bps: default 9000 = 90 % protected → exit when loss > 10 % of collateral.
+    ///         Higher value = tighter stop (less loss tolerated).
+    uint256 public profitProtectionRatioBps;
 
     // ─── Vault State ──────────────────────────────────────────────────────────
 
@@ -73,6 +90,11 @@ contract StrategyVault is IStrategyVault, Ownable, ReentrancyGuard {
 
     bool    public hedgeIsOpen;
     int256  public currentDailyFundingRateBps; // Last known funding rate (set at openHedge)
+
+    // ─── Hedge Entry Snapshot (for exit logic) ────────────────────────────────
+
+    uint256 public hedgeOpenTimestamp;  // block.timestamp when openHedge was called
+    uint256 public hedgeNotional;       // Notional recorded at openHedge (6 dec)
 
     // ─── Per-User Accounting ──────────────────────────────────────────────────
 
@@ -101,7 +123,7 @@ contract StrategyVault is IStrategyVault, Ownable, ReentrancyGuard {
         uint256 proceedsReturned
     );
     event LendingAPYUpdated(uint256 oldValue, uint256 newValue);
-    event CarryThresholdUpdated(int256 oldValue, int256 newValue);
+    event AutoExitTriggered(string reason, int256 netPnL);
 
     // ─── Constructor ──────────────────────────────────────────────────────────
 
@@ -123,9 +145,12 @@ contract StrategyVault is IStrategyVault, Ownable, ReentrancyGuard {
         perpEngine  = IPerpEngine(perpEngine_);
         oracle      = IPriceOracle(oracle_);
 
-        lendingAPYBps         = 500;   // 5 % APY
-        minCarryThresholdBps  = 200;   // 2 % minimum annualised carry
-        costEstimateBps       = 50;    // 0.5 % round-trip cost estimate
+        lendingAPYBps              = 500;    // 5 % APY
+        riskPremiumPerLeverageUnit = 75;     // 75 bps added to threshold per unit of leverage
+        costEstimateBps            = 50;     // 0.5 % round-trip cost estimate
+        safetyMarginBps            = 800;    // exit before reaching 500 bps liquidation threshold
+        maxHoldingPeriod           = 30 days;
+        profitProtectionRatioBps   = 9000;   // exit when net loss exceeds 10 % of posted collateral
     }
 
     // ─── IStrategyVault: Mutating ─────────────────────────────────────────────
@@ -230,17 +255,21 @@ contract StrategyVault is IStrategyVault, Ownable, ReentrancyGuard {
             "StrategyVault: insufficient USDC balance"
         );
 
-        // ── Carry viability check ──────────────────────────────────────────────
-        // The strategy only opens when the annualised carry (lending + funding − costs)
-        // exceeds the configured minimum threshold.
+        // ── Dynamic carry threshold ────────────────────────────────────────────
+        // Threshold scales with leverage so that higher-risk positions require
+        // proportionally higher expected carry before entry is permitted.
+        // threshold = costEstimate + (leverageRatio × riskPremiumPerLeverageUnit)
+        uint256 leverageRatio      = notional / collateral; // integer division, e.g. 5 for 5x
+        int256  dynamicThreshold   = int256(costEstimateBps + leverageRatio * riskPremiumPerLeverageUnit);
+
         int256 carryScore = ArbitrageMath.calcCarryScore(
             lendingAPYBps,
             dailyFundingRateBps_,
             costEstimateBps
         );
         require(
-            ArbitrageMath.isCarryViable(carryScore, minCarryThresholdBps),
-            "StrategyVault: carry score below threshold"
+            ArbitrageMath.isCarryViable(carryScore, dynamicThreshold),
+            "StrategyVault: carry score below dynamic threshold"
         );
 
         // ── Open position ──────────────────────────────────────────────────────
@@ -249,6 +278,8 @@ contract StrategyVault is IStrategyVault, Ownable, ReentrancyGuard {
 
         hedgeIsOpen                = true;
         hedgeCollateral            = collateral;
+        hedgeNotional              = notional;
+        hedgeOpenTimestamp         = block.timestamp;
         currentDailyFundingRateBps = dailyFundingRateBps_;
 
         uint256 entryPrice = oracle.getPrice();
@@ -269,11 +300,11 @@ contract StrategyVault is IStrategyVault, Ownable, ReentrancyGuard {
 
         int256 netPnL = int256(actualReceived) - int256(hedgeCollateral);
 
-        hedgeIsOpen     = false;
-        hedgeCollateral = 0;
+        hedgeIsOpen        = false;
+        hedgeCollateral    = 0;
+        hedgeNotional      = 0;
+        hedgeOpenTimestamp = 0;
 
-        // TODO: decompose netPnL into pricePnL vs fundingPnL for cleaner reporting.
-        //       Currently emitted as (0, 0, netPnL) — extend after full integration.
         emit HedgeClosed(0, 0, netPnL, actualReceived);
 
         // Suppress unused variable warning
@@ -349,7 +380,115 @@ contract StrategyVault is IStrategyVault, Ownable, ReentrancyGuard {
             dailyFundingRateBps_,
             costEstimateBps
         );
-        return ArbitrageMath.isCarryViable(score, minCarryThresholdBps);
+        // For the view check, require score > 0 (positive carry).
+        // Actual entry uses the leverage-adjusted dynamic threshold in openHedge.
+        return ArbitrageMath.isCarryViable(score, 0);
+    }
+
+    // ─── Exit Logic ───────────────────────────────────────────────────────────
+
+    /// @notice Evaluates whether any exit condition is currently triggered.
+    ///
+    ///         Four conditions are checked in priority order:
+    ///
+    ///         1. MARGIN  — margin ratio has fallen below safetyMarginBps.
+    ///                      Highest priority: prevents forced liquidation.
+    ///
+    ///         2. CAPITAL — net unrealised PnL (price + funding combined) has turned
+    ///                      negative and the absolute loss exceeds (1 − profitProtectionRatio)
+    ///                      of posted collateral. Default: exit when loss > 10 % of collateral.
+    ///
+    ///         3. CARRY   — current carry score has turned negative.
+    ///                      The income stream is gone; no reason to stay in.
+    ///
+    ///         4. TIME    — hedge has been open longer than maxHoldingPeriod.
+    ///                      Backstop exit to bound total exposure duration.
+    ///
+    /// @return triggered  True if any condition is met.
+    /// @return reason     Short description of the first triggered condition.
+    function shouldAutoExit()
+        external
+        view
+        returns (bool triggered, string memory reason)
+    {
+        if (!hedgeIsOpen) return (false, "no open hedge");
+
+        // ── 1. Margin safety ──────────────────────────────────────────────────
+        uint256 marginRatio = perpEngine.getMarginRatio(address(this));
+        if (marginRatio < safetyMarginBps) {
+            return (true, "MARGIN: below safety threshold");
+        }
+
+        // ── 2. Capital protection ─────────────────────────────────────────────
+        // Exits when unrealised net PnL (price + funding combined) has turned
+        // negative AND the absolute loss exceeds the allowed fraction of posted
+        // collateral.
+        //
+        // allowedLoss = collateral × (1 − profitProtectionRatioBps / 10_000)
+        //
+        // With the default profitProtectionRatioBps = 9000 (90 %):
+        //   allowedLoss = collateral × 10 %
+        //   e.g. $8 000 collateral → exit fires if net loss > $800
+        //
+        // Note: getUnrealizedPnL() returns funding income + price PnL combined.
+        // A rising ETH price erodes margin faster than funding income accumulates,
+        // so a net negative value signals the position is losing more than earning.
+        int256 unrealisedPnL = perpEngine.getUnrealizedPnL(address(this));
+        if (unrealisedPnL < 0) {
+            uint256 absLoss      = uint256(-unrealisedPnL);
+            uint256 allowedLoss  = (hedgeCollateral * (10_000 - profitProtectionRatioBps)) / 10_000;
+            if (absLoss > allowedLoss) {
+                return (true, "CAPITAL: net loss exceeds collateral protection threshold");
+            }
+        }
+
+        // ── 3. Carry gone ─────────────────────────────────────────────────────
+        // Uses currentDailyFundingRateBps which is recorded at openHedge time.
+        // This reflects the funding environment at entry; it is NOT updated in real
+        // time as market conditions change. To react to a funding rate reversal after
+        // entry, the owner should call closeHedge() or autoClose() directly, or use
+        // the margin condition above which will eventually trigger regardless.
+        int256 carryScore = ArbitrageMath.calcCarryScore(
+            lendingAPYBps,
+            currentDailyFundingRateBps,
+            costEstimateBps
+        );
+        if (carryScore <= 0) {
+            return (true, "CARRY: entry carry score is non-positive");
+        }
+
+        // ── 4. Time limit ─────────────────────────────────────────────────────
+        if (block.timestamp >= hedgeOpenTimestamp + maxHoldingPeriod) {
+            return (true, "TIME: maximum holding period reached");
+        }
+
+        return (false, "no exit condition triggered");
+    }
+
+    /// @notice Closes the hedge automatically if any exit condition is met.
+    ///         Callable by anyone — the owner does not need to monitor manually.
+    ///         Reverts if no exit condition is triggered (prevents premature closure).
+    function autoClose() external nonReentrant {
+        require(hedgeIsOpen, "StrategyVault: no open hedge");
+
+        (bool triggered, string memory reason) = this.shouldAutoExit();
+        require(triggered, "StrategyVault: no exit condition triggered");
+
+        uint256 balanceBefore  = usdc.balanceOf(address(this));
+        uint256 proceeds       = perpEngine.closeShort();
+        uint256 balanceAfter   = usdc.balanceOf(address(this));
+        uint256 actualReceived = balanceAfter - balanceBefore;
+        int256  netPnL         = int256(actualReceived) - int256(hedgeCollateral);
+
+        hedgeIsOpen        = false;
+        hedgeCollateral    = 0;
+        hedgeNotional      = 0;
+        hedgeOpenTimestamp = 0;
+
+        emit AutoExitTriggered(reason, netPnL);
+        emit HedgeClosed(0, 0, netPnL, actualReceived);
+
+        (proceeds);
     }
 
     // ─── Admin ────────────────────────────────────────────────────────────────
@@ -361,15 +500,31 @@ contract StrategyVault is IStrategyVault, Ownable, ReentrancyGuard {
         lendingAPYBps = newAPYBps;
     }
 
-    /// @notice Update the minimum carry threshold. Owner only.
-    function setMinCarryThreshold(int256 newThresholdBps) external onlyOwner {
-        emit CarryThresholdUpdated(minCarryThresholdBps, newThresholdBps);
-        minCarryThresholdBps = newThresholdBps;
+    /// @notice Update the risk premium per leverage unit. Owner only.
+    function setRiskPremiumPerLeverageUnit(uint256 newPremiumBps) external onlyOwner {
+        riskPremiumPerLeverageUnit = newPremiumBps;
     }
 
     /// @notice Update the cost estimate. Owner only.
     function setCostEstimate(uint256 newCostBps) external onlyOwner {
         costEstimateBps = newCostBps;
+    }
+
+    /// @notice Update the safety margin threshold for auto-exit. Owner only.
+    function setSafetyMargin(uint256 newMarginBps) external onlyOwner {
+        require(newMarginBps > 500, "StrategyVault: must be above liquidation threshold");
+        safetyMarginBps = newMarginBps;
+    }
+
+    /// @notice Update the maximum holding period. Owner only.
+    function setMaxHoldingPeriod(uint256 newPeriodSeconds) external onlyOwner {
+        maxHoldingPeriod = newPeriodSeconds;
+    }
+
+    /// @notice Update the profit protection ratio. Owner only.
+    function setProfitProtectionRatio(uint256 newRatioBps) external onlyOwner {
+        require(newRatioBps <= 10_000, "StrategyVault: ratio exceeds 100%");
+        profitProtectionRatioBps = newRatioBps;
     }
 
     // ─── Internal ─────────────────────────────────────────────────────────────

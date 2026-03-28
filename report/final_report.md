@@ -77,8 +77,14 @@ This report is organised as follows: Section 2 provides background on perpetual 
 ```
 carryScore = lendingAPYBps + (dailyFundingRateBps × 365) − costBps
 
-Open   when: carryScore > 200 bps (configurable threshold)
-Close  when: funding turns negative OR marginRatio < 500 bps
+dynamicThreshold = costBps + (leverageRatio × riskPremiumPerUnit)
+  e.g. 5x leverage: threshold = 50 + (5 × 75) = 425 bps
+
+Open   when: carryScore > dynamicThreshold (leverage-scaled)
+Close  when: (1) marginRatio < 800 bps  OR
+             (2) net loss > 10% of collateral  OR
+             (3) carry score at entry ≤ 0  OR
+             (4) holding period > 30 days
 ```
 
 ### 3.3 Cash Flow Diagram
@@ -168,7 +174,7 @@ Unlike a true delta-neutral cash-and-carry, this strategy holds only the short l
 - Accepts USDC deposits, tracks internal shares
 - Accrues lending yield on-chain (simple interest per second)
 - openHedge / closeHedge: owner only
-- Viability gate: carryScore must exceed minCarryThresholdBps before hedge opens
+- Viability gate: carryScore must exceed a leverage-scaled dynamic threshold before hedge opens
 
 ### 5.3 Key Function: openHedge
 
@@ -177,7 +183,7 @@ function openHedge(uint256 notional, uint256 collateral, int256 dailyFundingRate
     external onlyOwner
 {
     // 1. Compute carry score
-    // 2. Require carryScore > minCarryThresholdBps
+    // 2. Require carryScore > dynamicThreshold (= costBps + leverageRatio × riskPremium)
     // 3. Approve perpEngine to spend collateral
     // 4. Call perpEngine.openShort(notional, collateral)
     // 5. Record hedge state
