@@ -283,15 +283,13 @@ Deploy script selects oracle at deploy time:
 
 ### 7.1 Deployed Contract Addresses (Sepolia)
 
-> TODO: fill after deployment
-
 | Contract | Address | Etherscan |
 |----------|---------|-----------|
-| MockUSDC | `0x...` | [link] |
-| ArbitrageToken (CARB) | `0x...` | [link] |
-| ChainlinkPriceOracle | `0x...` | [link] |
-| MockPerpEngine | `0x...` | [link] |
-| StrategyVault | `0x...` | [link] |
+| MockUSDC | `0x84EAb608016e21E4618c63B01F7b3b043F4f457e` | [View ↗](https://sepolia.etherscan.io/address/0x84EAb608016e21E4618c63B01F7b3b043F4f457e) |
+| ArbitrageToken (CARB) | `0xd2E7bA891e0Ecd142695d04e8Ed79e0C4947922F` | [View ↗](https://sepolia.etherscan.io/address/0xd2E7bA891e0Ecd142695d04e8Ed79e0C4947922F) |
+| ChainlinkPriceOracle | `0x27768a80Fb849F6c1bB941C8de62F417Cd968e35` | [View ↗](https://sepolia.etherscan.io/address/0x27768a80Fb849F6c1bB941C8de62F417Cd968e35) |
+| MockPerpEngine | `0x478832D03495390E47aFD238A9bA11414096A452` | [View ↗](https://sepolia.etherscan.io/address/0x478832D03495390E47aFD238A9bA11414096A452) |
+| StrategyVault | `0x036EA2E331994a04d853B54Ad19D05524eC5b399` | [View ↗](https://sepolia.etherscan.io/address/0x036EA2E331994a04d853B54Ad19D05524eC5b399) |
 
 ### 7.2 Etherscan Screenshots
 
