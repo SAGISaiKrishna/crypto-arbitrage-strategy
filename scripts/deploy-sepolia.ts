@@ -106,7 +106,12 @@ async function main() {
     "deployed-sepolia.json",
     JSON.stringify(deployedAddresses, null, 2)
   );
-  console.log("Addresses saved to deployed-sepolia.json\n");
+  fs.writeFileSync(
+    "frontend/contracts/addresses.sepolia.json",
+    JSON.stringify(deployedAddresses, null, 2)
+  );
+  console.log("Addresses saved to deployed-sepolia.json");
+  console.log("Frontend config saved to frontend/contracts/addresses.sepolia.json\n");
 }
 
 main().catch((err) => {

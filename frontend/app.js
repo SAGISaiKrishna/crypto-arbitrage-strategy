@@ -11,18 +11,16 @@
  *   4. Open index.html in a browser with MetaMask installed.
  */
 
-// ─── Contract Addresses ───────────────────────────────────────────────────────
-// TODO: fill these in after deployment
-
-const CONTRACTS = {
-  MockUSDC:        { address: "0x...", abi: null },
-  ArbitrageToken:  { address: "0x...", abi: null },
-  StrategyVault:   { address: "0x...", abi: null },
-  MockPerpEngine:  { address: "0x...", abi: null },
-  PriceOracle:     { address: "0x...", abi: null },
-};
-
+const LOCAL_EXPLORER = "http://127.0.0.1:8545";
 const SEPOLIA_EXPLORER = "https://sepolia.etherscan.io";
+const ABI_PATHS = {
+  MockUSDC: "./contracts/MockUSDC.json",
+  ArbitrageToken: "./contracts/ArbitrageToken.json",
+  StrategyVault: "./contracts/StrategyVault.json",
+  MockPerpEngine: "./contracts/MockPerpEngine.json",
+  MockPriceOracle: "./contracts/MockPriceOracle.json",
+  ChainlinkPriceOracle: "./contracts/ChainlinkPriceOracle.json",
+};
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
 let provider = null;
@@ -30,6 +28,8 @@ let signer   = null;
 let vault    = null;
 let usdc     = null;
 let oracle   = null;
+let contractsConfig = null;
+let explorerBaseUrl = LOCAL_EXPLORER;
 
 // ─── Wallet ───────────────────────────────────────────────────────────────────
 
@@ -48,22 +48,78 @@ async function connectWallet() {
   document.getElementById("btn-connect").textContent = "Connected";
 
   logTx(`Wallet connected: ${address}`);
-  await initContracts();
-  await refreshAll();
+  try {
+    await initContracts();
+    await refreshAll();
+  } catch (e) {
+    console.error(e);
+    logTx(`Setup error: ${e.message}`);
+    alert(e.message);
+  }
 }
 
 async function initContracts() {
-  // Load ABIs from frontend/contracts/ directory
-  // TODO: copy ABIs here after running `npx hardhat compile`
-  // Example (if using a local server):
-  //   const vaultAbi  = await fetch("./contracts/StrategyVault.json").then(r => r.json());
+  const addresses = await loadAddresses();
+  const network = await provider.getNetwork();
+  explorerBaseUrl = network.chainId === 11155111n ? SEPOLIA_EXPLORER : LOCAL_EXPLORER;
 
-  // Placeholder — replace with actual ABI loading
-  console.warn("ABIs not loaded. Copy artifacts to frontend/contracts/ and update initContracts().");
+  const [
+    vaultArtifact,
+    usdcArtifact,
+    oracleArtifact,
+    engineArtifact,
+    tokenArtifact,
+  ] = await Promise.all([
+    loadArtifact(ABI_PATHS.StrategyVault),
+    loadArtifact(ABI_PATHS.MockUSDC),
+    loadArtifact(
+      network.chainId === 11155111n
+        ? ABI_PATHS.ChainlinkPriceOracle
+        : ABI_PATHS.MockPriceOracle
+    ),
+    loadArtifact(ABI_PATHS.MockPerpEngine),
+    loadArtifact(ABI_PATHS.ArbitrageToken),
+  ]);
 
-  // vault  = new ethers.Contract(CONTRACTS.StrategyVault.address, vaultAbi.abi, signer);
-  // usdc   = new ethers.Contract(CONTRACTS.MockUSDC.address,       usdcAbi.abi,  signer);
-  // oracle = new ethers.Contract(CONTRACTS.PriceOracle.address,    oracleAbi.abi,provider);
+  contractsConfig = {
+    MockUSDC: { address: addresses.MockUSDC, abi: usdcArtifact.abi },
+    ArbitrageToken: { address: addresses.ArbitrageToken, abi: tokenArtifact.abi },
+    StrategyVault: { address: addresses.StrategyVault, abi: vaultArtifact.abi },
+    MockPerpEngine: { address: addresses.MockPerpEngine, abi: engineArtifact.abi },
+    PriceOracle: {
+      address: network.chainId === 11155111n
+        ? addresses.ChainlinkPriceOracle
+        : addresses.MockPriceOracle,
+      abi: oracleArtifact.abi,
+    },
+  };
+
+  vault  = new ethers.Contract(contractsConfig.StrategyVault.address, contractsConfig.StrategyVault.abi, signer);
+  usdc   = new ethers.Contract(contractsConfig.MockUSDC.address, contractsConfig.MockUSDC.abi, signer);
+  oracle = new ethers.Contract(contractsConfig.PriceOracle.address, contractsConfig.PriceOracle.abi, provider);
+}
+
+async function loadAddresses() {
+  const network = await provider.getNetwork();
+  const path = network.chainId === 11155111n
+    ? "./contracts/addresses.sepolia.json"
+    : "./contracts/addresses.local.json";
+  const response = await fetch(path);
+  if (!response.ok) {
+    throw new Error(
+      `Could not load addresses file: ${path}. ` +
+      `Create it locally after deployment, or use the example file as a guide.`
+    );
+  }
+  return response.json();
+}
+
+async function loadArtifact(path) {
+  const response = await fetch(path);
+  if (!response.ok) {
+    throw new Error(`Could not load ABI file: ${path}`);
+  }
+  return response.json();
 }
 
 // ─── Oracle ───────────────────────────────────────────────────────────────────
@@ -130,10 +186,10 @@ async function approveUSDC() {
   if (!usdc) { showNotReady(); return; }
   try {
     const tx = await usdc.approve(
-      CONTRACTS.StrategyVault.address,
+      contractsConfig.StrategyVault.address,
       ethers.MaxUint256
     );
-    logTx(`Approving USDC... <a href="${SEPOLIA_EXPLORER}/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,12)}…</a>`);
+    logTx(`Approving USDC... <a href="${explorerBaseUrl}/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,12)}…</a>`);
     await tx.wait();
     logTx("USDC approved ✓");
   } catch (e) {
@@ -150,7 +206,7 @@ async function deposit() {
   try {
     const amount = BigInt(Math.floor(parseFloat(amountStr) * 1e6));
     const tx = await vault.deposit(amount);
-    logTx(`Depositing $${amountStr} USDC... <a href="${SEPOLIA_EXPLORER}/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,12)}…</a>`);
+    logTx(`Depositing $${amountStr} USDC... <a href="${explorerBaseUrl}/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,12)}…</a>`);
     await tx.wait();
     logTx(`Deposited $${amountStr} USDC ✓`);
     await refreshVault();
@@ -169,7 +225,7 @@ async function withdrawAll() {
     if (info.shares === 0n) { alert("No shares to withdraw."); return; }
 
     const tx = await vault.withdraw(info.shares);
-    logTx(`Withdrawing... <a href="${SEPOLIA_EXPLORER}/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,12)}…</a>`);
+    logTx(`Withdrawing... <a href="${explorerBaseUrl}/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,12)}…</a>`);
     await tx.wait();
     logTx("Withdrawal complete ✓");
     await refreshVault();
@@ -190,7 +246,7 @@ async function openHedge() {
 
   try {
     const tx = await vault.openHedge(notional, collat, funding);
-    logTx(`Opening hedge... <a href="${SEPOLIA_EXPLORER}/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,12)}…</a>`);
+    logTx(`Opening hedge... <a href="${explorerBaseUrl}/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,12)}…</a>`);
     await tx.wait();
     logTx("Hedge opened ✓");
     await refreshVault();
@@ -204,7 +260,7 @@ async function closeHedge() {
   if (!vault) { showNotReady(); return; }
   try {
     const tx = await vault.closeHedge();
-    logTx(`Closing hedge... <a href="${SEPOLIA_EXPLORER}/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,12)}…</a>`);
+    logTx(`Closing hedge... <a href="${explorerBaseUrl}/tx/${tx.hash}" target="_blank">${tx.hash.slice(0,12)}…</a>`);
     await tx.wait();
     logTx("Hedge closed ✓");
     await refreshVault();
@@ -219,12 +275,15 @@ async function closeHedge() {
 function populateContractTable() {
   const tbody = document.getElementById("contract-list");
   tbody.innerHTML = "";
-  for (const [name, { address }] of Object.entries(CONTRACTS)) {
+  if (!contractsConfig) {
+    return;
+  }
+  for (const [name, { address }] of Object.entries(contractsConfig)) {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${name}</td>
       <td style="font-family:monospace;font-size:0.78rem">${address}</td>
-      <td><a href="${SEPOLIA_EXPLORER}/address/${address}" target="_blank">View ↗</a></td>
+      <td><a href="${explorerBaseUrl}/address/${address}" target="_blank">View ↗</a></td>
     `;
     tbody.appendChild(row);
   }

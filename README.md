@@ -4,6 +4,10 @@ An on-chain proof-of-concept and real-data backtest of a delta-neutral long-spot
 
 **Research question:** Does a delta-neutral long-spot / short-perpetual ETH strategy generate attractive historical returns through funding carry, and how can the mechanism be represented on-chain?
 
+> **Important**
+> This repository is meant to be safe for a team and safe for a public GitHub submission.
+> Do **not** commit `.env`, private keys, RPC secrets, or personal deployment files.
+
 ---
 
 ## What This Project Does
@@ -65,6 +69,18 @@ The project is split into two independent layers:
 
 ---
 
+## Setup Flow
+
+If you are opening this project for the first time, use this order:
+
+1. Run tests to confirm the Solidity system works
+2. Run the backtest to regenerate charts and tables
+3. Use the frontend locally with MetaMask
+4. Deploy to Sepolia
+5. Verify contracts on Etherscan
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -74,7 +90,10 @@ npm install
 pip install pandas numpy matplotlib
 ```
 
-Copy `.env.example` to `.env` and fill in your keys (for Sepolia deployment).
+For Sepolia deployment later, copy `.env.example` to `.env` and fill in your own values locally.
+
+> **Do not commit `.env`**
+> Every teammate should use their **own** wallet, **own** RPC URL, and **own** Etherscan API key.
 
 ### 1 — Run the smart-contract tests
 
@@ -106,19 +125,138 @@ To run the full methodology audit:
 python3 backtest/audit.py
 ```
 
-### 3 — Deploy to local node
+### 3 — Run the frontend locally
+
+The frontend uses **MetaMask**.
+
+It does **not** ask users to paste a private key into the page.
+Instead:
+- MetaMask provides the wallet account
+- MetaMask signs transactions
+- The frontend only needs contract addresses and ABI files
+
+#### Step A: start a local Hardhat chain
+
+```bash
+npx hardhat node
+```
+
+#### Step B: deploy the contracts locally
+
+In a second terminal:
+
+```bash
+npx hardhat run scripts/deploy-local.ts --network localhost
+```
+
+This creates local address files for frontend use.
+
+#### Step C: serve the frontend
+
+In a third terminal:
+
+```bash
+cd frontend
+python3 -m http.server 8080
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8080
+```
+
+#### Step D: connect MetaMask to the local chain
+
+Add a MetaMask network with:
+
+- RPC URL: `http://127.0.0.1:8545`
+- Chain ID: `31337`
+- Currency symbol: `ETH`
+
+Then import one of the Hardhat test accounts shown in the `npx hardhat node` terminal.
+
+> **Important**
+> These local Hardhat keys are only for local development.
+> Never use them on Sepolia or Mainnet.
+
+#### Step E: interact through the frontend
+
+Once MetaMask is connected to the local chain:
+
+- use a funded local test account
+- approve USDC
+- deposit into the vault
+- if connected as owner, open or close the hedge
+- read vault state and oracle state from the dashboard
+
+### 4 — Deploy to local node without the frontend
+
+If you only want the contracts locally:
 
 ```bash
 npx hardhat node                                              # Terminal 1
 npx hardhat run scripts/deploy-local.ts --network localhost  # Terminal 2
 ```
 
-### 4 — Deploy to Sepolia
+### 5 — Deploy to Sepolia
 
 ```bash
 npx hardhat run scripts/deploy-sepolia.ts --network sepolia
 npx hardhat run scripts/verify-sepolia.ts  --network sepolia
 ```
+
+After Sepolia deployment:
+- contract addresses are saved to `deployed-sepolia.json`
+- frontend addresses are saved to `frontend/contracts/addresses.sepolia.json`
+
+---
+
+## Frontend Notes
+
+The frontend is in `frontend/` and uses plain HTML/CSS/JS with `ethers.js`.
+
+### What the frontend needs
+
+- ABI files in `frontend/contracts/`
+- a local addresses file:
+  `frontend/contracts/addresses.local.json`
+- or a Sepolia addresses file:
+  `frontend/contracts/addresses.sepolia.json`
+
+An example structure is provided in:
+
+`frontend/contracts/addresses.example.json`
+
+### What should be committed
+
+- frontend source code
+- ABI-loading logic
+- example config files
+
+### What should not be committed
+
+- `.env`
+- personal private keys
+- personal RPC keys
+- generated local deployment files
+- personal local frontend address files
+
+---
+
+## Team Workflow
+
+For a team project, the correct setup is:
+
+1. Everyone pulls the same public repo
+2. Each teammate creates their own local `.env`
+3. Each teammate can deploy locally and use their own `addresses.local.json`
+4. One final Sepolia deployment can be chosen for the submission
+5. The final submitted report should reference the final verified Sepolia contracts
+
+> **Recommended**
+> Keep the repo generic.
+> Keep personal credentials and temporary deployment files local-only.
 
 ---
 
@@ -162,13 +300,11 @@ The vault exits automatically if any of these fire:
 
 | Contract | Address | Etherscan |
 |----------|---------|-----------|
-| MockUSDC | `0x...` | [link] |
-| ArbitrageToken (CARB) | `0x...` | [link] |
-| ChainlinkPriceOracle | `0x...` | [link] |
-| MockPerpEngine | `0x...` | [link] |
-| StrategyVault | `0x...` | [link] |
-
-> Fill these after Sepolia deployment.
+| MockUSDC | `0x84EAb608016e21E4618c63B01F7b3b043F4f457e` | [View ↗](https://sepolia.etherscan.io/address/0x84EAb608016e21E4618c63B01F7b3b043F4f457e) |
+| ArbitrageToken (CARB) | `0xd2E7bA891e0Ecd142695d04e8Ed79e0C4947922F` | [View ↗](https://sepolia.etherscan.io/address/0xd2E7bA891e0Ecd142695d04e8Ed79e0C4947922F) |
+| ChainlinkPriceOracle | `0x27768a80Fb849F6c1bB941C8de62F417Cd968e35` | [View ↗](https://sepolia.etherscan.io/address/0x27768a80Fb849F6c1bB941C8de62F417Cd968e35) |
+| MockPerpEngine | `0x478832D03495390E47aFD238A9bA11414096A452` | [View ↗](https://sepolia.etherscan.io/address/0x478832D03495390E47aFD238A9bA11414096A452) |
+| StrategyVault | `0x036EA2E331994a04d853B54Ad19D05524eC5b399` | [View ↗](https://sepolia.etherscan.io/address/0x036EA2E331994a04d853B54Ad19D05524eC5b399) |
 
 ---
 
@@ -214,3 +350,9 @@ PRIVATE_KEY=           # Deployer wallet private key
 SEPOLIA_RPC_URL=       # Alchemy / Infura Sepolia endpoint
 ETHERSCAN_API_KEY=     # For contract verification
 ```
+
+> **Security**
+> `PRIVATE_KEY` should be your wallet's private key **without** the `0x` prefix.
+> Store it only in your local `.env`.
+> Never paste it into the frontend.
+> Never commit it to GitHub.

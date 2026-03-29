@@ -1,0 +1,8 @@
+{
+  "MockUSDC": "0xYourMockUsdcAddressHere",
+  "ArbitrageToken": "0xYourArbitrageTokenAddressHere",
+  "MockPriceOracle": "0xYourMockPriceOracleAddressHere",
+  "ChainlinkPriceOracle": "0xYourChainlinkPriceOracleAddressHere",
+  "MockPerpEngine": "0xYourMockPerpEngineAddressHere",
+  "StrategyVault": "0xYourStrategyVaultAddressHere"
+}

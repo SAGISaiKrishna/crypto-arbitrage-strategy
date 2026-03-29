@@ -22,7 +22,10 @@ excel/*.csv
 charts/*.png
 
 # Deployment artefacts (contain no secrets but are generated files)
+deployed-local.json
 deployed-sepolia.json
+frontend/contracts/addresses.local.json
+frontend/contracts/addresses.sepolia.json
 
 # macOS
 .DS_Store

@@ -1,4 +1,5 @@
 import { ethers } from "hardhat";
+import fs from "fs";
 
 /// @notice Deploy all contracts to a local Hardhat node for development and testing.
 ///
@@ -69,13 +70,25 @@ async function main() {
 
   // ── Summary ──────────────────────────────────────────────────────────────────
   console.log("\n=== Deployment Complete ===");
-  console.log({
+  const deployedAddresses = {
     MockUSDC:       await usdc.getAddress(),
     ArbitrageToken: await token.getAddress(),
-    MockPriceOracle:await oracle.getAddress(),
+    MockPriceOracle: await oracle.getAddress(),
     MockPerpEngine: await engine.getAddress(),
     StrategyVault:  await vault.getAddress(),
-  });
+  };
+  console.log(deployedAddresses);
+
+  fs.writeFileSync(
+    "deployed-local.json",
+    JSON.stringify(deployedAddresses, null, 2)
+  );
+  fs.writeFileSync(
+    "frontend/contracts/addresses.local.json",
+    JSON.stringify(deployedAddresses, null, 2)
+  );
+  console.log("Saved deployment addresses to deployed-local.json");
+  console.log("Saved frontend config to frontend/contracts/addresses.local.json");
   console.log("\nRun scripts/interact.ts to walk through the strategy lifecycle.\n");
 }
 
