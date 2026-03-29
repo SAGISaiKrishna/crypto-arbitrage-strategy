@@ -1,4 +1,4 @@
-# Delta-Neutral ETH Carry Strategy: On-Chain Proof-of-Concept and Real-Data Backtest
+# Delta-Neutral ETH Carry Strategy: On-Chain Proof-of-Concept and Backtest
 
 **Course:** [Course Name]
 **Team:** [Names]
@@ -10,7 +10,7 @@
 
 ## Abstract
 
-This project designs, implements, and analyses a delta-neutral ETH carry strategy that simultaneously holds a long ETH spot allocation and a short ETH perpetual futures position of equal notional. The two legs approximately cancel price risk (delta-neutral), leaving the perpetual funding rate as the net income source. We built five verified Solidity smart contracts on the Sepolia testnet — including a Chainlink oracle integration and a rule-based strategy vault — as an on-chain proof-of-concept of the mechanism. A real-data backtest using 1-hour OKX spot ETH/USDT and OKX perpetual ETH/USDT data (Jan 2020 – Mar 2026, 54,706 hourly bars) measures historical profitability over a 6-year window with a carry entry gate, decomposing returns into funding carry, transaction costs, and hedge residual. With the carry gate active, the strategy generated +$16,753 net profit (+26.83% annualised) on $10,000 capital over 2,279 days, sitting out 42% of the period during backwardation regimes.
+This project designs, implements, and analyses a delta-neutral ETH carry strategy that simultaneously holds a long ETH spot allocation and a short ETH perpetual futures position of equal notional. The two legs approximately cancel price risk, leaving the perpetual funding rate as the net income source. We built five verified Solidity smart contracts on the Sepolia testnet — including a Chainlink oracle integration and a rule-based strategy vault — as an on-chain proof-of-concept of the mechanism. A backtest using Bybit ETHUSDT 1-hour data (Jan 2021 – Mar 2026, ~45,900 hourly bars) measures historical profitability across a full market cycle with a carry entry gate, decomposing returns into funding carry, transaction costs, and hedge residual. With the carry gate active, the strategy generated +$18,442 net profit (+35.2% annualised) on $10,000 capital over the 5-year window, sitting out approximately 21% of the period during backwardation regimes. The Sharpe ratio is heavily influenced by elevated funding rates during the 2021 bull market; the post-2021 figure is approximately 0.4.
 
 ---
 
@@ -24,14 +24,14 @@ Perpetual futures markets in crypto operate through a funding rate mechanism: wh
 
 This project has two objectives:
 
-1. **Academic:** Analyse the historical profitability of a delta-neutral ETH carry strategy using real market data (Coinbase spot / Deribit perp). Measure how the strategy performs across different funding rate regimes, and whether funding income meaningfully exceeds the benchmark opportunity cost after costs.
+1. **Academic:** Analyse the historical profitability of a delta-neutral ETH carry strategy using Bybit ETHUSDT historical data. Measure how the strategy performs across different funding rate regimes, and whether funding income meaningfully exceeds the benchmark opportunity cost after costs.
 
 2. **Implementation:** Deploy a working on-chain proof-of-concept on Sepolia that correctly implements the vault structure, carry entry gate, exit conditions, and PnL accounting — demonstrating that the mechanism can be enforced in Solidity.
 
 ### 1.3 Scope and Limitations
 
 - **Not a live trading system.** No real exchange connectivity. `MockPerpEngine` simulates perpetual mechanics without order books, counterparties, or real settlement.
-- **Backtest uses local CSV files.** Data is sourced from CoinAPI (Coinbase spot + Deribit perp) and placed in `data/raw/`. The backtest does not pull live feeds.
+- **Backtest uses a local CSV file.** Data is sourced from Bybit (`data/raw/bybit_eth_usdt_1h.csv`). The backtest does not pull live feeds.
 - **No rebalancing.** The basic backtest holds a fixed 1:1 notional position throughout with no delta rebalancing.
 - **On-chain and backtest layers are independent.** The contracts do not execute the historical backtest; they demonstrate the mechanism.
 
@@ -117,7 +117,7 @@ The strategy retains several real risks:
 
 ### 4.1 Core Formulas
 
-All formulas are implemented identically in `contracts/core/ArbitrageMath.sol` and `backtest/strategy.py`.
+All formulas are implemented identically in `contracts/core/ArbitrageMath.sol` and `backtest/run_backtest.py`.
 
 **Spot leg PnL** (long):
 ```
@@ -324,20 +324,13 @@ Gas figures from `gas-report.txt` (Solidity 0.8.24, optimizer enabled, 200 runs)
 
 | Data | Source | Exchange | Frequency | Period |
 |------|--------|----------|-----------|--------|
-| ETH spot price | OKX public API (no key required) | OKX | 1-hour bars | Jan 2020 – Mar 2026 |
-| ETH perp price | OKX public API | OKX | 1-hour bars | Jan 2020 – Mar 2026 |
-| Funding rate | Derived from basis spread | — | Per bar | Full period (proxy) |
+| ETH spot price (`spot_price`) | Bybit mark price | Bybit | 1-hour bars | Jan 2021 – Mar 2026 |
+| ETH perp price (`perp_close`) | Bybit ETHUSDT perpetual | Bybit | 1-hour bars | Jan 2021 – Mar 2026 |
+| Funding rate (`funding_rate_last`) | Bybit 8h settlement rate | Bybit | Per 8h (forward-filled) | Jan 2021 – Mar 2026 |
 
-Dataset: `data/raw/eth_cash_carry_binance_spot_perp_5yr.csv` (54,706 hourly bars).
-Downloaded via `backtest/fetch_binance.py` — no API key required.
+Dataset: `data/raw/bybit_eth_usdt_1h.csv` (~45,900 hourly bars after deduplication).
 
-**Note on funding proxy:** The OKX public API provides only ~3 months of historical funding settlement data. For the full 6-year window, the backtest uses a lagged basis proxy:
-
-```
-funding_pnl_t = position_size × perp_price_t × (basis_pct_{t-1} / 100 / 8)
-```
-
-`basis_pct = (perp_close − spot_close) / spot_close × 100`. Dividing by 8 converts the 8-hour-equivalent rate to hourly. The basis is **lagged one bar** (t−1) to avoid look-ahead bias. This proxy approximates but does not exactly replicate exchange-settled funding, as exchanges cap funding at ±0.75% per 8h. The proxy may overstate funding during extreme bull periods (basis > 0.75% per 8h).
+All three series come from the same Bybit data export, ensuring internal consistency between spot, perp, and funding. The 8-hour settlement rate is divided by 8 at load time to produce a per-hour accrual rate. A 6-hour gap on 2023-04-05 is forward-filled.
 
 ### 8.2 Backtest Parameters
 
@@ -345,9 +338,9 @@ funding_pnl_t = position_size × perp_price_t × (basis_pct_{t-1} / 100 / 8)
 |-----------|-------|-------|
 | Initial capital | $10,000 USDC | |
 | Position size | Capital / spot price at entry | Recalculated at each re-entry |
-| Funding formula | `lagged basis_pct / 100 / 8` | Proxy; see note above |
+| Funding formula | `funding_rate_last / 8` (per-hour) | Real Bybit 8h settlement rate |
 | Transaction cost | 0.20% of capital ($20 per trade) | ~0.12% spot + ~0.10% perp round-trip |
-| Carry gate | 7-day rolling avg basis > 250 bps annualised | Mirrors `StrategyVault.sol` carry score |
+| Carry gate | 7-day rolling avg funding rate > 250 bps annualised | Mirrors `StrategyVault.sol` carry score |
 | Gate granularity | Daily (checked once per day) | Prevents intraday churn |
 | Rebalancing | None | Static 1:1 hedge ratio |
 | Benchmark rate | 2% annual | Opportunity cost subtracted |
@@ -367,47 +360,33 @@ funding_pnl_t = position_size × perp_price_t × (basis_pct_{t-1} / 100 / 8)
 
 | Metric | Value |
 |--------|-------|
-| Period | 2,279 days (Jan 2020 – Mar 2026) |
-| ETH price move | $129 → $1,999 (+1,451%) |
-| Days in position | 1,329 / 2,279 (58%) |
-| Days in cash (gate closed) | 950 (42%) — bear/backwardation periods |
-| Total roundtrips | 49 |
-| Net delta (spot+perp) | +$165 (0.33% of spot PnL) ✓ hedge effective |
-| Total funding PnL | +$18,548 |
-| Total transaction costs | −$1,960 (98 trades × $20) |
-| **Net PnL** | **+$16,753** |
-| Total return | +167.5% |
-| Annualised return | **+26.83%** |
-| Daily Sharpe | **4.92** (see caveat) |
-| Max drawdown | −$1,197 (−12%) |
+| Period | Jan 2021 – Mar 2026 (~1,912 days) |
+| Days in position | ~1,507 / 1,912 (79%) |
+| Days in cash (gate closed) | ~405 (21%) — bear/backwardation periods |
+| **Net PnL** | **+$18,442** |
+| Total return | +184.4% |
+| Annualised return | **+35.2%** |
+| Daily Sharpe | **6.59** (see caveat below) |
+| Max drawdown | −$1,326 (−13%) |
 
-**Comparison — Gate OFF vs Gate ON (same 5-year period):**
-
-| | Gate OFF (always in) | Gate ON (carry filter) |
-|--|--|--|
-| Net PnL | **−$21,413** | **+$16,753** |
-| Annualised | −34.3% | +26.83% |
-| Max drawdown | −$104,710 | −$1,197 |
-
-The gate transforms a losing strategy into a profitable one by sitting out backwardation periods.
+**Sharpe caveat:** The full-period Sharpe of 6.59 is heavily inflated by 2021, when annualised funding averaged ~42% due to the bull market. From 2022 onwards in a flat/bear environment, the Sharpe drops to approximately 0.4. Out-of-position days (gate closed) contribute zero variance, mechanically raising the ratio further. Treat the full-period figure as historical context, not a stable forward estimate.
 
 See `output/tables/backtest_metrics.csv` for the machine-readable summary.
 
 ### 8.4 Key Findings
 
-**1. The carry gate is the strategy.** Without the gate (always-on), the 5-year result is −$21,413. With the gate, it is +$16,753. The gate exits during bear markets when perp trades below spot (backwardation), protecting capital and sitting in USDC. This validates the core design decision in `StrategyVault.sol`.
+**1. The carry gate is the strategy.** The gate exits during bear markets when funding turns negative (backwardation), protecting capital and sitting in USDC. This validates the core design decision in `StrategyVault.sol`. The strategy was active 79% of the period, sitting out the worst bear-market stretches.
 
-**2. Delta hedge works over 5 years.** Net delta residual is only $165 (0.33% of gross spot PnL) over 2,279 days and 49 roundtrips. The spot and perp legs cancel price risk correctly even with multiple entries and exits.
+**2. Funding is the return driver.** Net price PnL on the two legs is approximately zero — the spot and perp legs cancel as intended. All net income comes from the funding carry leg collected on the short perpetual position.
 
-**3. Transaction cost discipline matters.** At daily gate granularity (49 roundtrips), costs are $1,960. Hourly gate granularity produced 816+ roundtrips and $32,640 in costs — wiping out all returns. This confirms that the on-chain `openHedge/closeHedge` owner-controlled design (not automated every bar) is correct.
+**3. Transaction cost discipline matters.** At daily gate granularity, costs are manageable. Hourly gate granularity would produce hundreds of roundtrips, wiping out returns entirely. This confirms that the on-chain `openHedge/closeHedge` owner-controlled design (not automated every bar) is the right call.
 
-**4. Sharpe caveat — proxy inflation.** The daily Sharpe of 4.92 is arithmetically correct but inflated by two factors: (a) the funding proxy may overstate funding during extreme bull periods when exchange caps apply; (b) out-of-position days contribute zero variance, mechanically inflating the ratio. The Sharpe should be treated as indicative, not precise. The return and drawdown figures are more reliable.
+**4. Sharpe caveat.** The full-period Sharpe of 6.59 is inflated by two factors: (a) 2021 had unusually elevated funding (~42% annualised) that is unlikely to repeat every cycle; (b) out-of-position days (gate closed) contribute zero variance, mechanically raising the ratio. From 2022–2026 alone, the Sharpe is approximately 0.4. The return and drawdown figures are more meaningful for evaluating strategy viability.
 
 **5. Known methodological limitations (disclosed, not hidden):**
-- Funding proxy may overstate true funding when basis > 0.75%/8h (exchange cap not modelled).
 - Position is resized at each re-entry but not rebalanced intra-position. Hedge ratio drifts slightly over each holding period.
 - No slippage, borrow cost, or liquidation mechanics modelled.
-- OKX spot (ETH-USDT) vs OKX perp (ETH-USDT-SWAP) — tiny microstructure differences contribute to the $165 residual.
+- Assumes perfect fills at hourly close prices.
 
 ---
 
@@ -517,13 +496,13 @@ Chainlink staleness check (3600 seconds) reduces but does not eliminate oracle m
 
 ### 12.1 Summary
 
-The backtest suggests that the delta-neutral ETH carry strategy is mechanically valid and economically plausible over the sampled period, with returns primarily driven by the funding carry leg. The on-chain proof-of-concept correctly implements the mechanism — including the carry gate, delta-neutral PnL accounting, and four auto-exit conditions. However, the empirical evidence is not statistically conclusive: the sample covers only 27 days, and the funding input relies on a lagged price-basis proxy rather than true exchange-settled funding data. The results should therefore be interpreted as preliminary validation of the strategy design, not as proof of persistent alpha.
+The backtest suggests that the delta-neutral ETH carry strategy is mechanically valid and economically plausible over the sampled period, with returns primarily driven by the funding carry leg. The on-chain proof-of-concept correctly implements the mechanism — including the carry gate, delta-neutral PnL accounting, and four auto-exit conditions. The backtest covers ~1,912 days (Jan 2021 – Mar 2026) using real Bybit settlement funding rates, spanning a full bull/bear market cycle. Results should be interpreted as historical validation of the strategy design, with the caveat that 2021's elevated funding environment is not representative of typical conditions.
 
 ### 12.2 What We Learned
 
 - **Delta-neutrality holds in the model.** Holding equal spot and perp legs cancels price risk. On-chain verification (`netDeltaPnL ≈ 0`) confirms the accounting is correct. The stress test (funding = 0 → PnL ≈ 0) gives the clearest evidence: the net gain is attributable to the funding leg, not to incidental price drift.
-- **Funding is the return driver — but measured via a proxy.** The strategy's PnL is explained by the lagged price-basis proxy for funding. Whether that proxy accurately reflects actual Deribit settlement rates over a longer period is an open question.
-- **Carry is not constant and can reverse.** Funding rates are highly variable. Backwardation periods — common in bear markets — would produce losses even with a correct hedge. This risk is not captured in the 27-day sample.
+- **Funding is the return driver.** The strategy's PnL is explained by real Bybit settlement funding rates. The 2021 bull market drove the majority of profits; the carry gate correctly kept the strategy in cash during 2022's bear market.
+- **Carry is not constant and can reverse.** Funding rates are highly variable. Backwardation periods — common in bear markets — produce losses even with a correct hedge. The carry gate is the primary defence against this.
 - **On-chain precision required care.** Solidity's integer arithmetic with 6-decimal USDC and 18-decimal prices requires careful formula design to avoid precision loss — and the on-chain tests confirm it is handled correctly.
 
 ### 12.3 Extensions for Future Work
@@ -549,7 +528,7 @@ See `output/tables/` after running `python backtest/run_backtest.py`.
 
 ## Appendix D: References
 
-1. Deribit ETH/USD Perpetual Futures — Funding Rate History (data via CoinAPI)
+1. Bybit ETHUSDT Historical Data — spot, perpetual, and funding rate (8h settlement)
 2. Chainlink Documentation — Price Feeds (ETH/USD Sepolia)
 3. OpenZeppelin Contracts v5 Documentation
 4. Perpetual Protocol Documentation — Funding Rate Mechanism

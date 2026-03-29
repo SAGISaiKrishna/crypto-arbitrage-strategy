@@ -1,2 +1,0 @@
-n_days,initial_capital_usd,final_pnl_usd,total_funding_usd,total_benchmark_cost,net_carry_usd,annualized_return_pct,sharpe_ratio,max_drawdown_usd,win_rate_pct,avg_daily_basis_bps,positive_basis_days,avg_carry_score_bps
-27,100000.0,-164.95,32.84,147.79,-164.95,-2.23,-2.681,233.98,51.9,0.829,19,97.6

@@ -5,7 +5,7 @@
 ```
 IPriceOracle (interface)
     ├── MockPriceOracle          ← local testing
-    └── ChainlinkPriceOracle     ← Sepolia production
+    └── ChainlinkPriceOracle     ← Sepolia (real ETH/USD feed)
 
 IPerpEngine (interface)
     └── MockPerpEngine
@@ -19,58 +19,68 @@ IStrategyVault (interface)
             ├── reads: IPriceOracle
             └── uses:  ArbitrageMath (library)
 
-ArbitrageToken              ← standalone ERC20, no dependencies
-ArbitrageMath               ← pure library, no external dependencies
+ArbitrageToken (CARB)   ← standalone ERC20, no dependencies
+ArbitrageMath           ← pure library, no external dependencies
 ```
 
-## Data Flow
+---
+
+## Lifecycle
 
 ```
 User
  │ deposit(usdcAmount)
  ▼
 StrategyVault
- │ tracks: shares, principal, depositTimestamp
- │ accrues: lending yield (simple interest per second)
- │ holds:   USDC balance
+ │ tracks shares and deposit timestamp
+ │ accrues lending yield (simple interest per second)
  │
- └─► [owner calls openHedge(notional, collateral, fundingRateBps)]
+ └─► owner calls openHedge(notional, collateral, fundingRateBps)
          │
-         ├── ArbitrageMath.calcCarryScore() → check viability
-         │
-         ├── approve MockPerpEngine to spend collateral USDC
-         │
+         ├── ArbitrageMath.calcCarryScore() — check viability
+         ├── approve MockPerpEngine for collateral spend
          └── MockPerpEngine.openShort(notional, collateral)
-                 │
-                 ├── reads IPriceOracle.getPrice() → entryPrice
-                 └── stores Position struct
+                 └── reads oracle price → stores Position
 
-         [time passes — funding accrues per second via block.timestamp]
+     [time passes, funding accrues via block.timestamp]
 
- └─► [anyone calls MockPerpEngine.accrueFunding(vault)]
-         └── checkpoints cumulativeFunding += calcFundingPayment()
+ └─► anyone calls MockPerpEngine.accrueFunding(vault)
+         └── cumulativeFunding += calcFundingPayment()
 
- └─► [view calls: getVaultState(), getUserValue(), getUnrealizedPnL()]
-         └── reads oracle, computes current PnL, margin ratio
+ └─► view: getVaultState(), getUserValue(), getUnrealizedPnL()
 
- └─► [owner calls closeHedge()]
+ └─► owner calls closeHedge()
          └── MockPerpEngine.closeShort()
                  ├── reads current oracle price
-                 ├── computes: price PnL + cumulative funding
-                 └── transfers (collateral ± PnL) back to StrategyVault
+                 ├── computes price PnL + cumulative funding
+                 └── returns (collateral ± PnL) to StrategyVault
 
- └─► [user calls withdraw(shares)]
-         ├── settles lending yield
-         └── returns proportional USDC to user
+ └─► user calls withdraw(shares)
+         └── returns proportional USDC + accrued yield
 ```
 
-## Key Design Decisions
+---
+
+## Key design decisions
 
 | Decision | Choice | Reason |
-|----------|--------|--------|
-| Share accounting | Internal mapping (uint256) | Simpler than ERC20 shares; avoids aUSDC token complexity |
-| Lending yield | On-chain simple interest | Honest, testable, shows on Etherscan |
-| Oracle | Interface abstraction | Swap Mock ↔ Chainlink at deploy time |
-| Access control | Owner-only openHedge/closeHedge | Cleaner; manager controls strategy timing |
-| LendingVault | Not a separate contract | Lending yield lives in StrategyVault |
-| aUSDC | Not minted | CARB satisfies ERC20 requirement |
+|---|---|---|
+| Oracle abstraction | Interface (Mock / Chainlink) | Swap at deploy time without changing vault code |
+| Access control | Owner-only for openHedge / closeHedge | Manager controls strategy timing |
+| ERC20 requirement | ArbitrageToken (CARB) | Course requirement; separate from vault shares |
+| Perp exchange | MockPerpEngine | No real exchange on testnet; proof-of-concept |
+| Share accounting | Internal mapping | Simpler than a separate share token |
+
+---
+
+## What is real vs mocked
+
+| Component | Status |
+|---|---|
+| ETH/USD price feed (Sepolia) | Real — Chainlink oracle |
+| Perpetual exchange | Mock — `MockPerpEngine` (no order book) |
+| USDC | Mock — `MockUSDC` (mintable for testing) |
+| Backtest data | Real — Bybit ETHUSDT hourly, 2021–2026 |
+
+The backtest and smart contracts are independent layers. The contracts implement
+the same carry-gate logic as the backtest but do not read from the historical dataset.

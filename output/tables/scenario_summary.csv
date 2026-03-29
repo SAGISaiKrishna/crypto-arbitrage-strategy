@@ -1,5 +1,0 @@
-scenario,days,initial_capital_usd,final_net_pnl_usd,cumulative_lending_usd,cumulative_funding_usd,cumulative_price_pnl_usd,annualized_return_bps,annualized_return_pct,sharpe_ratio,max_drawdown_usd,break_even_days,days_at_liquidation_risk,final_margin_ratio_bps
-Favorable,30,100000.0,1860.96,410.96,1500.0,0.0,2264.2,22.642,64.326,0.0,0.8,0,2150.0
-Neutral,30,100000.0,1260.96,410.96,900.0,0.0,1534.2,15.342,54.672,0.0,1.1,0,2090.0
-Backwardation,30,100000.0,18597.99,246.58,-600.0,19001.41,22627.5,226.275,91.58,0.0,0.1,0,3840.1
-GBM Volatile,30,100000.0,65.14,410.96,635.12,-930.94,79.3,0.793,0.021,10379.61,N/A,0,1970.4

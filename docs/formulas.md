@@ -1,111 +1,97 @@
-# Mathematical Formulas
+# Formulas
 
-All formulas are implemented in both `contracts/core/ArbitrageMath.sol` (on-chain)
-and `simulation/models.py` (Python) using identical logic.
-
-## Notation
-
-| Symbol | Meaning | Units |
-|--------|---------|-------|
-| N | Notional position size | USDC |
-| C | Collateral / margin posted | USDC |
-| P₀ | ETH entry price | USD (18 dec on-chain) |
-| Pₜ | ETH current price | USD |
-| r_f | Daily funding rate | basis points |
-| r_L | Lending APY | basis points |
-| t | Elapsed seconds | seconds |
-| BPS | 10 000 | dimensionless |
+These formulas are used in both the Python backtest (`run_backtest.py`) and the
+on-chain implementation (`contracts/core/ArbitrageMath.sol`).
 
 ---
 
-## 1. Short Position Price PnL
+## 1. Spot PnL (long leg)
 
 ```
-shortPricePnL = N × (P₀ − Pₜ) / P₀
+spot_pnl = position_size × (spot_t − spot_{t-1})
 ```
 
-- Positive when Pₜ < P₀ (ETH fell, short profits)
-- Negative when Pₜ > P₀ (ETH rose, short loses)
-
-**Example:** N = $10 000, P₀ = $2 000, Pₜ = $2 200
-→ PnL = 10 000 × (2 000 − 2 200) / 2 000 = **−$1 000**
+Positive when ETH price rises. Offset by the perp leg.
 
 ---
 
-## 2. Funding Payment (over elapsed time)
+## 2. Perp PnL (short leg)
 
 ```
-fundingPayment = N × r_f × t / (BPS × 86 400)
+perp_pnl = −position_size × (perp_t − perp_{t-1})
 ```
 
-Where t is in seconds, 86 400 = seconds per day.
-
-- Positive: contango (shorts receive from longs)
-- Negative: backwardation (shorts pay to longs)
-
-**Example:** N = $10 000, r_f = 3 bps/day, t = 1 day = 86 400s
-→ fundingPayment = 10 000 × 3 × 86 400 / (10 000 × 86 400) = **$3.00**
+Negative when ETH price rises. Offsets the spot leg.
 
 ---
 
-## 3. Lending Yield (over elapsed time)
+## 3. Funding PnL
 
 ```
-lendingYield = C × r_L × t / (BPS × 365 days)
+funding_pnl = position_size × perp_t × funding_rate_{t-1}
 ```
 
-**Example:** C = $100 000, r_L = 500 bps, t = 30 days
-→ lendingYield = 100 000 × 500 × (30 × 86 400) / (10 000 × 31 536 000) = **$411.00**
+`funding_rate` is the Bybit 8h settlement rate divided by 8 (per-hour accrual).
+Positive in contango (shorts receive from longs); negative in backwardation.
 
 ---
 
-## 4. Margin Ratio
+## 4. Basis
 
 ```
-equity       = C + unrealisedPnL
-marginRatio  = equity / N × BPS    [in basis points]
+basis_pct = (perp_close − spot_close) / spot_close × 100
 ```
 
-**Example:** C = $2 000, unrealisedPnL = −$500, N = $10 000
-→ marginRatio = (2 000 − 500) / 10 000 × 10 000 = **1 500 bps (15%)**
+Positive = contango. Negative = backwardation.
 
 ---
 
-## 5. Health Factor
+## 5. Carry gate signal
 
 ```
-healthFactor = marginRatio / maintenanceMarginBps × 1e18
-```
+annualised_funding_bps = 7d_rolling_avg(daily_mean_funding_rate) × 8760 × 10000
 
-- healthFactor > 1e18: position is safe
-- healthFactor < 1e18: position is liquidatable
+gate_open = annualised_funding_bps > 250
+```
 
 ---
 
-## 6. Carry Score (annualised)
+## 6. On-chain: carry score (ArbitrageMath.sol)
 
 ```
-carryScore = r_L + (r_f × 365) − costBps    [all in basis points]
+carryScore = fundingRateBps × 365 − benchmarkBps − costBps
 ```
 
-**Example:** r_L = 500, r_f = 3, costBps = 50
-→ carryScore = 500 + 1 095 − 50 = **1 545 bps = 15.45% annualised**
+Where `fundingRateBps` is the daily funding rate in basis points.
+Position is viable when `carryScore > 0`.
 
 ---
 
-## 7. Break-Even Days
+## 7. On-chain: margin ratio
 
 ```
-breakEvenDays = entryCost / dailyNetYield
+equity      = collateral + unrealisedPnL
+marginRatio = equity / notional × BPS
 ```
 
-**Example:** entryCost = $50, dailyNetYield = $5
-→ breakEvenDays = **10 days**
+Liquidation threshold: `marginRatio < maintenanceMarginBps`.
 
 ---
 
-## 8. Annualised Return (from simulation)
+## 8. On-chain: short position price PnL
 
 ```
-annualisedReturnBps = (cumulativePnL / principal / elapsedDays) × 365 × BPS
+shortPricePnL = notional × (entryPrice − currentPrice) / entryPrice
 ```
+
+Positive when price falls (short profits); negative when price rises.
+
+---
+
+## 9. On-chain: funding payment (per elapsed time)
+
+```
+fundingPayment = notional × fundingRateBps × elapsedSeconds / (BPS × 86400)
+```
+
+`BPS = 10000`, `86400` = seconds per day.
