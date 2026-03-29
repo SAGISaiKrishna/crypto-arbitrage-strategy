@@ -1,4 +1,10 @@
 import { ethers } from "hardhat";
+import {
+  MockUSDC,
+  MockPriceOracle,
+  MockPerpEngine,
+  StrategyVault,
+} from "../typechain-types";
 
 /// @notice Interactive walkthrough of the full strategy lifecycle.
 ///         Prints formatted output suitable for screenshots in the submission.
@@ -41,11 +47,11 @@ async function main() {
   console.log("║   Crypto Arbitrage Strategy — Interactive Demo               ║");
   console.log("╚══════════════════════════════════════════════════════════════╝\n");
 
-  // Attach to deployed contracts
-  const usdc   = await ethers.getContractAt("MockUSDC",       ADDRESSES.MockUSDC);
-  const oracle = await ethers.getContractAt("MockPriceOracle",ADDRESSES.MockPriceOracle);
-  const engine = await ethers.getContractAt("MockPerpEngine", ADDRESSES.MockPerpEngine);
-  const vault  = await ethers.getContractAt("StrategyVault",  ADDRESSES.StrategyVault);
+  // Attach to deployed contracts with proper types
+  const usdc   = await ethers.getContractAt("MockUSDC",        ADDRESSES.MockUSDC)        as unknown as MockUSDC;
+  const oracle = await ethers.getContractAt("MockPriceOracle", ADDRESSES.MockPriceOracle) as unknown as MockPriceOracle;
+  const engine = await ethers.getContractAt("MockPerpEngine",  ADDRESSES.MockPerpEngine)  as unknown as MockPerpEngine;
+  const vault  = await ethers.getContractAt("StrategyVault",   ADDRESSES.StrategyVault)   as unknown as StrategyVault;
 
   // ── Step 1: Check initial state ───────────────────────────────────────────────
   console.log("── 1. Initial State ─────────────────────────────────────────────");

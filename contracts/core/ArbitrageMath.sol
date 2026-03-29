@@ -2,9 +2,15 @@
 pragma solidity ^0.8.24;
 
 /// @title ArbitrageMath
-/// @notice Pure math library for the carry/arbitrage strategy.
-///         All financial formulas live here so they can be tested independently
-///         and the vault / perp engine contracts stay readable.
+/// @notice Pure math library for the delta-neutral ETH carry strategy.
+///         All financial formulas live here so they can be tested independently.
+///
+///         Strategy context:
+///           The vault holds a LONG ETH spot exposure (via USDC allocation)
+///           and a SHORT ETH perpetual futures position. These two legs
+///           approximately cancel each other's price risk (delta-neutral).
+///           The net income is the perpetual funding rate, less a benchmark
+///           opportunity cost (e.g. stablecoin yield / T-bill rate).
 ///
 ///         Unit convention (must be consistent across callers):
 ///           - USDC amounts    : uint256 / int256,  6 decimals  (1 USDC = 1e6)
@@ -13,14 +19,42 @@ pragma solidity ^0.8.24;
 ///           - Time            : seconds (block.timestamp)
 library ArbitrageMath {
 
-    // ─── Short Position P&L ───────────────────────────────────────────────────
+    // ─── Spot Leg P&L ─────────────────────────────────────────────────────────
 
-    /// @notice Unrealised P&L on a short ETH perpetual position.
+    /// @notice Unrealised P&L on a long ETH spot allocation.
+    /// @dev    Positive when ETH price rises (long profits), negative when it falls.
+    ///         In the delta-neutral strategy this cancels with the short perp P&L.
+    ///
+    ///         Formula: allocation × (currentPrice − entryPrice) / entryPrice
+    ///
+    /// @param spotAllocation  USDC value of ETH spot exposure, 6 decimals
+    /// @param entryPrice      ETH/USD at position open, 18 decimals
+    /// @param currentPrice    Current ETH/USD, 18 decimals
+    /// @return pnl            Signed USDC value, 6 decimals
+    function calcSpotPnL(
+        uint256 spotAllocation,
+        uint256 entryPrice,
+        uint256 currentPrice
+    ) internal pure returns (int256 pnl) {
+        require(entryPrice > 0, "ArbitrageMath: zero entry price");
+        if (currentPrice >= entryPrice) {
+            uint256 profit = (spotAllocation * (currentPrice - entryPrice)) / entryPrice;
+            pnl = int256(profit);
+        } else {
+            uint256 loss = (spotAllocation * (entryPrice - currentPrice)) / entryPrice;
+            pnl = -int256(loss);
+        }
+    }
+
+    // ─── Short Perp Leg P&L ───────────────────────────────────────────────────
+
+    /// @notice Unrealised P&L on the short ETH perpetual position (price component only).
     /// @dev    Positive when ETH price falls (short profits), negative when it rises.
+    ///         Combined with calcSpotPnL, the net delta is approximately zero.
     ///
     ///         Formula: notional × (entryPrice − currentPrice) / entryPrice
     ///
-    /// @param notional      Position size in USDC, 6 decimals
+    /// @param notional      Short position notional in USDC, 6 decimals
     /// @param entryPrice    ETH/USD at position open, 18 decimals
     /// @param currentPrice  Current ETH/USD, 18 decimals
     /// @return pnl          Signed USDC value, 6 decimals
@@ -31,21 +65,20 @@ library ArbitrageMath {
     ) internal pure returns (int256 pnl) {
         require(entryPrice > 0, "ArbitrageMath: zero entry price");
         if (currentPrice >= entryPrice) {
-            // Price rose → short loses
             uint256 loss = (notional * (currentPrice - entryPrice)) / entryPrice;
             pnl = -int256(loss);
         } else {
-            // Price fell → short profits
             uint256 profit = (notional * (entryPrice - currentPrice)) / entryPrice;
             pnl = int256(profit);
         }
     }
 
-    // ─── Funding ──────────────────────────────────────────────────────────────
+    // ─── Funding Income ───────────────────────────────────────────────────────
 
-    /// @notice Funding payment accrued on a short position over `elapsedSeconds`.
-    /// @dev    Positive = shorts receive from longs (contango / normal market).
-    ///         Negative = shorts pay to longs (backwardation / inverted market).
+    /// @notice Funding payment accrued on the short position over `elapsedSeconds`.
+    /// @dev    Positive = shorts receive from longs (contango, funding rate > 0).
+    ///         Negative = shorts pay to longs (backwardation, funding rate < 0).
+    ///         This is the primary income source of the delta-neutral strategy.
     ///
     ///         Formula: notional × dailyFundingRateBps × elapsedSeconds
     ///                  ─────────────────────────────────────────────────
@@ -63,29 +96,6 @@ library ArbitrageMath {
         payment =
             (int256(notional) * dailyFundingRateBps * int256(elapsedSeconds)) /
             (10_000 * 86_400);
-    }
-
-    // ─── Lending Yield ────────────────────────────────────────────────────────
-
-    /// @notice Lending yield accrued on idle USDC over `elapsedSeconds`.
-    /// @dev    Models Aave-style simple interest. Always non-negative.
-    ///
-    ///         Formula: principal × lendingAPYBps × elapsedSeconds
-    ///                  ──────────────────────────────────────────
-    ///                           10 000 × 365 days
-    ///
-    /// @param principal        USDC amount earning yield, 6 decimals
-    /// @param lendingAPYBps    Annual percentage yield in bps (500 = 5 %)
-    /// @param elapsedSeconds   Seconds since deposit
-    /// @return yieldAmount     USDC yield, 6 decimals
-    function calcLendingYield(
-        uint256 principal,
-        uint256 lendingAPYBps,
-        uint256 elapsedSeconds
-    ) internal pure returns (uint256 yieldAmount) {
-        yieldAmount =
-            (principal * lendingAPYBps * elapsedSeconds) /
-            (10_000 * 365 days);
     }
 
     // ─── Margin & Health ──────────────────────────────────────────────────────
@@ -122,29 +132,30 @@ library ArbitrageMath {
         healthFactor = (marginRatioBps * 1e18) / maintenanceMarginBps;
     }
 
-    // ─── Carry / Viability ────────────────────────────────────────────────────
+    // ─── Carry Score ──────────────────────────────────────────────────────────
 
     /// @notice Annualised carry score in basis points.
-    ///         Positive score means the trade is expected to be profitable.
+    ///         Measures how much the funding rate exceeds the benchmark opportunity cost.
+    ///         Positive means it is worth entering the position.
     ///
-    ///         Formula: lendingAPYBps + (dailyFundingRateBps × 365) − costBps
+    ///         Formula: (dailyFundingRateBps × 365) − benchmarkRateBps − costBps
     ///
     ///         Where:
-    ///           lendingAPYBps       = annual lending yield (e.g. 500 = 5 %)
     ///           dailyFundingRateBps = daily funding (e.g. 3 = 0.03 %/day → 1 095 bps/year)
-    ///           costBps             = estimated annual execution cost
+    ///           benchmarkRateBps    = baseline return foregone (e.g. 200 = 2 % stablecoin yield)
+    ///           costBps             = estimated round-trip execution cost
     ///
-    /// @param lendingAPYBps         Annual lending yield in bps
+    /// @param benchmarkRateBps      Annual benchmark rate in bps (e.g. 200 = 2%)
     /// @param dailyFundingRateBps   Signed daily funding in bps
     /// @param costBps               Annual cost estimate in bps
     /// @return score                Signed annualised carry score in bps
     function calcCarryScore(
-        uint256 lendingAPYBps,
+        uint256 benchmarkRateBps,
         int256  dailyFundingRateBps,
         uint256 costBps
     ) internal pure returns (int256 score) {
         int256 annualizedFunding = dailyFundingRateBps * 365;
-        score = int256(lendingAPYBps) + annualizedFunding - int256(costBps);
+        score = annualizedFunding - int256(benchmarkRateBps) - int256(costBps);
     }
 
     /// @notice Returns true if the carry score exceeds the minimum threshold.

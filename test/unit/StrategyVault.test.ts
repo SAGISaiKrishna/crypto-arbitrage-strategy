@@ -4,7 +4,6 @@ import {
   StrategyVault, MockPerpEngine, MockUSDC, MockPriceOracle
 } from "../../typechain-types";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
-import { time } from "@nomicfoundation/hardhat-network-helpers";
 
 describe("StrategyVault", () => {
   let vault: StrategyVault;
@@ -17,7 +16,6 @@ describe("StrategyVault", () => {
 
   const ETH_PRICE = 2_000n * 10n ** 18n;
   const ONE_USDC  = 10n ** 6n;
-  const ONE_DAY   = 86_400;
 
   async function deployAll() {
     [owner, alice, bob] = await ethers.getSigners();
@@ -50,14 +48,13 @@ describe("StrategyVault", () => {
     await usdc.mint(alice.address, 50_000n * ONE_USDC);
     await usdc.mint(bob.address,   50_000n * ONE_USDC);
 
-    // Approve vault to spend users' USDC
     await usdc.connect(alice).approve(await vault.getAddress(), ethers.MaxUint256);
     await usdc.connect(bob).approve(await vault.getAddress(),   ethers.MaxUint256);
   }
 
   beforeEach(deployAll);
 
-  // ─── Deposit ────────────────────────────────────────────────────────────────
+  // ─── Deposit ──────────────────────────────────────────────────────────────
 
   describe("deposit", () => {
     it("accepts USDC and mints shares", async () => {
@@ -70,7 +67,7 @@ describe("StrategyVault", () => {
     });
 
     it("transfers USDC from user to vault", async () => {
-      const amount     = 10_000n * ONE_USDC;
+      const amount      = 10_000n * ONE_USDC;
       const aliceBefore = await usdc.balanceOf(alice.address);
       await vault.connect(alice).deposit(amount);
       const aliceAfter  = await usdc.balanceOf(alice.address);
@@ -78,8 +75,7 @@ describe("StrategyVault", () => {
     });
 
     it("emits Deposited event", async () => {
-      const amount = 5_000n * ONE_USDC;
-      await expect(vault.connect(alice).deposit(amount))
+      await expect(vault.connect(alice).deposit(5_000n * ONE_USDC))
         .to.emit(vault, "Deposited");
     });
 
@@ -90,36 +86,24 @@ describe("StrategyVault", () => {
     });
   });
 
-  // ─── Withdraw ────────────────────────────────────────────────────────────────
+  // ─── Withdraw ─────────────────────────────────────────────────────────────
 
   describe("withdraw", () => {
-    it("returns USDC plus lending yield after holding period", async () => {
+    it("returns deposited USDC when no position is open", async () => {
       const amount = 10_000n * ONE_USDC;
       await vault.connect(alice).deposit(amount);
-
-      await time.increase(ONE_DAY * 365); // fast-forward 1 year
-
-      // In production the vault's USDC would be deposited in Aave, earning real yield
-      // that returns as interest income. In this mock, the owner tops up the vault
-      // with the equivalent yield amount to prove the payout mechanics work correctly
-      // when reserves are available. 5% APY on $10 000 for 1 year = $500.
-      await usdc.mint(await vault.getAddress(), 500n * ONE_USDC);
 
       const aliceBefore = await usdc.balanceOf(alice.address);
       const info        = await vault.userInfo(alice.address);
       await vault.connect(alice).withdraw(info.shares);
       const aliceAfter  = await usdc.balanceOf(alice.address);
 
-      const received = aliceAfter - aliceBefore;
-      // Should receive more than deposited: principal + simulated lending yield
-      expect(received).to.be.greaterThan(amount);
+      // Gets back exactly what she put in (no yield without open position)
+      expect(aliceAfter - aliceBefore).to.equal(amount);
     });
 
-    it("reverts when hedge is open", async () => {
-      const depositAmount = 20_000n * ONE_USDC;
-      await vault.connect(alice).deposit(depositAmount);
-
-      // Owner opens hedge
+    it("reverts when a position is open", async () => {
+      await vault.connect(alice).deposit(20_000n * ONE_USDC);
       await vault.connect(owner).openHedge(
         10_000n * ONE_USDC,
         2_000n  * ONE_USDC,
@@ -133,16 +117,16 @@ describe("StrategyVault", () => {
     });
   });
 
-  // ─── openHedge / closeHedge ──────────────────────────────────────────────────
+  // ─── openHedge ────────────────────────────────────────────────────────────
 
   describe("openHedge", () => {
     beforeEach(async () => {
-      // Deposit enough USDC to cover hedge collateral
       await vault.connect(alice).deposit(20_000n * ONE_USDC);
     });
 
-    it("opens hedge when carry score is viable", async () => {
-      // carryScore = 500 + 3*365 - 50 = 1545 bps > 200 threshold
+    it("opens position when carry score is viable", async () => {
+      // benchmark=200, funding=3 bps/day, cost=50 → score = 1095-200-50 = 845
+      // threshold at 5x leverage = 50 + 5*75 = 425; 845 > 425 ✓
       await vault.connect(owner).openHedge(
         10_000n * ONE_USDC,
         2_000n  * ONE_USDC,
@@ -151,8 +135,26 @@ describe("StrategyVault", () => {
       expect(await vault.hedgeIsOpen()).to.be.true;
     });
 
+    it("records spot allocation equal to notional", async () => {
+      await vault.connect(owner).openHedge(
+        10_000n * ONE_USDC,
+        2_000n  * ONE_USDC,
+        3n
+      );
+      expect(await vault.spotAllocationUsdc()).to.equal(10_000n * ONE_USDC);
+    });
+
+    it("records entry price from oracle", async () => {
+      await vault.connect(owner).openHedge(
+        10_000n * ONE_USDC,
+        2_000n  * ONE_USDC,
+        3n
+      );
+      expect(await vault.hedgeEntryPrice()).to.equal(ETH_PRICE);
+    });
+
     it("reverts when funding rate makes carry score too low", async () => {
-      // With funding = -10 bps/day: 500 + (-10*365) - 50 = -3200 bps < 200 threshold
+      // benchmark=200, funding=-10 bps/day, cost=50 → score = -3650-250 = -3900 < threshold
       await expect(
         vault.connect(owner).openHedge(
           10_000n * ONE_USDC,
@@ -175,26 +177,29 @@ describe("StrategyVault", () => {
     });
   });
 
+  // ─── closeHedge ───────────────────────────────────────────────────────────
+
   describe("closeHedge", () => {
     beforeEach(async () => {
       await vault.connect(alice).deposit(20_000n * ONE_USDC);
       await vault.connect(owner).openHedge(10_000n * ONE_USDC, 2_000n * ONE_USDC, 3n);
     });
 
-    it("closes hedge and sets hedgeIsOpen to false", async () => {
+    it("closes position and clears state", async () => {
       await vault.connect(owner).closeHedge();
       expect(await vault.hedgeIsOpen()).to.be.false;
+      expect(await vault.spotAllocationUsdc()).to.equal(0n);
+      expect(await vault.hedgeEntryPrice()).to.equal(0n);
     });
 
     it("returns USDC proceeds to vault", async () => {
       const balBefore = await usdc.balanceOf(await vault.getAddress());
       await vault.connect(owner).closeHedge();
       const balAfter  = await usdc.balanceOf(await vault.getAddress());
-      // Should have more or equal USDC (proceeds include funding + any price movement)
       expect(balAfter).to.be.greaterThanOrEqual(balBefore);
     });
 
-    it("reverts when no hedge is open", async () => {
+    it("reverts when no position is open", async () => {
       await vault.connect(owner).closeHedge();
       await expect(
         vault.connect(owner).closeHedge()
@@ -208,30 +213,43 @@ describe("StrategyVault", () => {
     });
   });
 
-  // ─── View functions ──────────────────────────────────────────────────────────
-
-  describe("isCarryViable", () => {
-    it("returns true for favourable funding rate", async () => {
-      // 3 bps/day: score = 500 + 1095 - 50 = 1545 > 200
-      expect(await vault.isCarryViable(3n)).to.be.true;
-    });
-
-    it("returns false for sufficiently negative funding rate", async () => {
-      expect(await vault.isCarryViable(-10n)).to.be.false;
-    });
-  });
+  // ─── getVaultState ────────────────────────────────────────────────────────
 
   describe("getVaultState", () => {
     it("returns correct state with no deposits", async () => {
       const state = await vault.getVaultState();
       expect(state.totalDeposited).to.equal(0n);
       expect(state.hedgeIsOpen).to.be.false;
+      expect(state.spotAllocationUsdc).to.equal(0n);
     });
 
     it("reflects deposits in totalDeposited", async () => {
       await vault.connect(alice).deposit(10_000n * ONE_USDC);
       const state = await vault.getVaultState();
       expect(state.totalDeposited).to.equal(10_000n * ONE_USDC);
+    });
+
+    it("reports netDeltaPnL ≈ 0 when price is unchanged (delta-neutral)", async () => {
+      await vault.connect(alice).deposit(20_000n * ONE_USDC);
+      await vault.connect(owner).openHedge(10_000n * ONE_USDC, 2_000n * ONE_USDC, 3n);
+
+      // ETH price unchanged at entry price → spot PnL + short PnL = 0
+      const state = await vault.getVaultState();
+      expect(state.netDeltaPnL).to.equal(0n);
+    });
+  });
+
+  // ─── isCarryViable ────────────────────────────────────────────────────────
+
+  describe("isCarryViable", () => {
+    it("returns true when funding exceeds benchmark and costs", async () => {
+      // benchmark=200, funding=3 bps/day, cost=50 → score = 845 > 0
+      expect(await vault.isCarryViable(3n)).to.be.true;
+    });
+
+    it("returns false for negative funding rate", async () => {
+      // benchmark=200, funding=-10 bps/day, cost=50 → score = -3900 < 0
+      expect(await vault.isCarryViable(-10n)).to.be.false;
     });
   });
 });

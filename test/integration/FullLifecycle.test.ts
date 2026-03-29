@@ -7,11 +7,14 @@ import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
 
 /// @title Full Lifecycle Integration Test
-/// @notice Simulates the complete strategy flow:
-///         deploy → deposit → openHedge → wait (funding accrues) → closeHedge → withdraw
+/// @notice Demonstrates the complete delta-neutral carry strategy on-chain:
 ///
-///         This test is the primary demonstration of the system working end-to-end.
-///         It mirrors what the deploy-local.ts script + interact.ts script would show.
+///         deploy → deposit → openHedge (spot + short perp)
+///         → wait (funding accrues) → closeHedge → withdraw
+///
+///         Strategy: Long ETH spot allocation + Short ETH perpetual futures
+///         Income:   Perpetual funding rate (received by shorts in contango)
+///         Delta:    Approximately zero (price moves cancel between legs)
 describe("Full Strategy Lifecycle (Integration)", () => {
   let vault:   StrategyVault;
   let engine:  MockPerpEngine;
@@ -29,7 +32,7 @@ describe("Full Strategy Lifecycle (Integration)", () => {
   before(async () => {
     [owner, alice, bob] = await ethers.getSigners();
 
-    // ── 1. Deploy all contracts ───────────────────────────────────────────────
+    // ── Deploy all contracts ──────────────────────────────────────────────────
     const USDC   = await ethers.getContractFactory("MockUSDC");
     usdc = (await USDC.deploy(owner.address)) as unknown as MockUSDC;
 
@@ -57,19 +60,18 @@ describe("Full Strategy Lifecycle (Integration)", () => {
     // Transfer engine ownership to vault
     await engine.transferOwnership(await vault.getAddress());
 
-    // Seed the engine with a USDC reserve so it can pay out funding income on closeShort.
-    // In a real exchange this reserve would be the insurance fund / counterparty collateral.
-    // Without it the mock caps proceeds to deposited collateral only, preventing funding payout.
+    // Seed the engine with a USDC reserve so it can pay out funding income on close.
+    // In a real exchange this would be the insurance fund / counterparty collateral.
     await usdc.mint(await engine.getAddress(), 10_000n * ONE_USDC);
 
-    // ── 2. Fund test users ────────────────────────────────────────────────────
+    // ── Fund test users ────────────────────────────────────────────────────────
     await usdc.mint(alice.address, 100_000n * ONE_USDC);
     await usdc.mint(bob.address,   100_000n * ONE_USDC);
     await usdc.connect(alice).approve(await vault.getAddress(), ethers.MaxUint256);
     await usdc.connect(bob).approve(await vault.getAddress(),   ethers.MaxUint256);
   });
 
-  // ── Step 1: Deposits ─────────────────────────────────────────────────────────
+  // ── Step 1: Deposits ───────────────────────────────────────────────────────
 
   it("Step 1: Alice and Bob deposit USDC into the vault", async () => {
     await vault.connect(alice).deposit(50_000n * ONE_USDC);
@@ -80,35 +82,48 @@ describe("Full Strategy Lifecycle (Integration)", () => {
     console.log(`    ✓ Total deposited: $${Number(state.totalDeposited) / 1e6}`);
   });
 
-  // ── Step 2: Carry Check ───────────────────────────────────────────────────────
+  // ── Step 2: Carry Check ────────────────────────────────────────────────────
 
   it("Step 2: Vault correctly reports carry viability", async () => {
-    // 3 bps/day funding → carryScore = 500 + 1095 - 50 = 1545 bps → viable
+    // benchmark=200, funding=3 bps/day, cost=50 → score = 845 bps → viable
     expect(await vault.isCarryViable(3n)).to.be.true;
-    // -5 bps/day funding → carryScore = 500 - 1825 - 50 = -1375 bps → not viable
+    // benchmark=200, funding=-5 bps/day, cost=50 → score = -2075 bps → not viable
     expect(await vault.isCarryViable(-5n)).to.be.false;
     console.log("    ✓ Carry viability check working correctly");
   });
 
-  // ── Step 3: Open Hedge ───────────────────────────────────────────────────────
+  // ── Step 3: Open Position ──────────────────────────────────────────────────
 
-  it("Step 3: Owner opens short ETH hedge", async () => {
-    const notional   = 40_000n * ONE_USDC; // $40 000 notional
-    const collateral = 8_000n  * ONE_USDC; // $8 000 margin (20%)
+  it("Step 3: Owner opens delta-neutral position (long spot + short perp)", async () => {
+    const notional   = 40_000n * ONE_USDC; // $40 000 notional (= spot allocation = perp notional)
+    const collateral = 8_000n  * ONE_USDC; // $8 000 margin (20% of notional = 5x leverage)
 
     await vault.connect(owner).openHedge(notional, collateral, 3n);
 
     expect(await vault.hedgeIsOpen()).to.be.true;
     expect(await vault.hedgeCollateral()).to.equal(collateral);
+    expect(await vault.spotAllocationUsdc()).to.equal(notional);
 
     const state = await vault.getVaultState();
-    console.log(`    ✓ Hedge opened | notional: $${Number(notional)/1e6} | collateral: $${Number(collateral)/1e6}`);
+    console.log(`    ✓ Position opened | notional: $${Number(notional)/1e6} | collateral: $${Number(collateral)/1e6}`);
     console.log(`    ✓ Carry score: ${state.carryScore} bps annualised`);
+    console.log(`    ✓ Spot allocation: $${Number(await vault.spotAllocationUsdc())/1e6}`);
   });
 
-  // ── Step 4: Time Passes (30 days) ────────────────────────────────────────────
+  // ── Step 4: Delta-Neutral Check ────────────────────────────────────────────
 
-  it("Step 4: 30 days pass — funding and lending yield accrue", async () => {
+  it("Step 4: Price legs cancel — net delta PnL is approximately zero", async () => {
+    // With ETH price unchanged, spot PnL + short PnL = 0
+    const state = await vault.getVaultState();
+    expect(state.netDeltaPnL).to.equal(0n);
+    console.log(`    ✓ Net delta PnL: ${state.netDeltaPnL} (delta-neutral confirmed at unchanged price)`);
+    console.log(`    ✓ Spot leg PnL:  ${state.spotPricePnL}`);
+    console.log(`    ✓ Short leg PnL: ${state.shortPricePnL}`);
+  });
+
+  // ── Step 5: Time Passes (30 days) ──────────────────────────────────────────
+
+  it("Step 5: 30 days pass — funding income accrues", async () => {
     await time.increase(ONE_DAY * 30);
 
     // Accrue funding checkpoint
@@ -117,61 +132,58 @@ describe("Full Strategy Lifecycle (Integration)", () => {
     const pos = await engine.getPosition(await vault.getAddress());
     // 3 bps/day × 30 days × $40 000 notional = $360
     expect(pos.cumulativeFunding).to.be.greaterThan(0n);
-    console.log(`    ✓ Cumulative funding: $${Number(pos.cumulativeFunding) / 1e6}`);
+    console.log(`    ✓ Cumulative funding income: $${Number(pos.cumulativeFunding) / 1e6}`);
 
-    // Lending yield for Alice: 5% APY × 30/365 × $50 000 ≈ $205
+    // User value: proportional share of vault
     const aliceValue = await vault.getUserValue(alice.address);
     console.log(`    ✓ Alice's vault value: $${Number(aliceValue) / 1e6}`);
-    expect(aliceValue).to.be.greaterThan(50_000n * ONE_USDC);
   });
 
-  // ── Step 5: Margin Check ─────────────────────────────────────────────────────
+  // ── Step 6: Margin Check ───────────────────────────────────────────────────
 
-  it("Step 5: Margin ratio remains healthy with flat ETH price", async () => {
-    const marginRatio = await engine.getMarginRatio(await vault.getAddress());
+  it("Step 6: Margin ratio remains healthy with flat ETH price", async () => {
+    const marginRatio    = await engine.getMarginRatio(await vault.getAddress());
     const isLiquidatable = await engine.isLiquidatable(await vault.getAddress());
 
     expect(isLiquidatable).to.be.false;
-    // After 30 days positive funding, margin ratio should be above initial 2000 bps
     expect(marginRatio).to.be.greaterThanOrEqual(2_000n);
     console.log(`    ✓ Margin ratio: ${marginRatio} bps — healthy`);
   });
 
-  // ── Step 6: Close Hedge ───────────────────────────────────────────────────────
+  // ── Step 7: Close Position ─────────────────────────────────────────────────
 
-  it("Step 6: Owner closes hedge and receives proceeds", async () => {
+  it("Step 7: Owner closes position and receives proceeds including funding", async () => {
     const vaultBalBefore = await usdc.balanceOf(await vault.getAddress());
     await vault.connect(owner).closeHedge();
     const vaultBalAfter  = await usdc.balanceOf(await vault.getAddress());
 
     expect(await vault.hedgeIsOpen()).to.be.false;
-    // Vault should have more USDC than before (funding income)
+    expect(await vault.spotAllocationUsdc()).to.equal(0n);
+    // Vault should have more USDC than before (funding income returned with collateral)
     expect(vaultBalAfter).to.be.greaterThan(vaultBalBefore);
-    console.log(`    ✓ Hedge closed | USDC returned to vault: $${Number(vaultBalAfter - vaultBalBefore) / 1e6} profit`);
+    console.log(`    ✓ Position closed | USDC profit returned: $${Number(vaultBalAfter - vaultBalBefore) / 1e6}`);
   });
 
-  // ── Step 7: Withdraw ─────────────────────────────────────────────────────────
+  // ── Step 8: Withdraw ───────────────────────────────────────────────────────
 
-  it("Step 7: Alice withdraws and receives more than her deposit", async () => {
+  it("Step 8: Alice withdraws and receives more than her deposit (funding income)", async () => {
     const aliceBefore = await usdc.balanceOf(alice.address);
     const aliceInfo   = await vault.userInfo(alice.address);
 
     await vault.connect(alice).withdraw(aliceInfo.shares);
 
-    const aliceAfter  = await usdc.balanceOf(alice.address);
-    const received    = aliceAfter - aliceBefore;
+    const aliceAfter = await usdc.balanceOf(alice.address);
+    const received   = aliceAfter - aliceBefore;
 
-    // Alice should receive her $50 000 back plus her share of:
-    // - 30-day lending yield (~$205)
-    // - 30-day funding income from hedge (proportional)
+    // Alice's share = 50/80 = 62.5% of $360 funding ≈ $225 profit
     expect(received).to.be.greaterThan(50_000n * ONE_USDC);
     console.log(`    ✓ Alice received: $${Number(received) / 1e6} (deposited $50 000)`);
-    console.log(`    ✓ Net profit: $${Number(received - 50_000n * ONE_USDC) / 1e6}`);
+    console.log(`    ✓ Net funding carry: $${Number(received - 50_000n * ONE_USDC) / 1e6}`);
   });
 
-  // ── Step 8: CARB Token ───────────────────────────────────────────────────────
+  // ── Step 9: CARB Token ─────────────────────────────────────────────────────
 
-  it("Step 8: CARB token is deployed and transferable", async () => {
+  it("Step 9: CARB token is deployed and transferable", async () => {
     expect(await token.name()).to.equal("Crypto Arbitrage Token");
     expect(await token.symbol()).to.equal("CARB");
     expect(await token.totalSupply()).to.equal(10_000_000n * 10n ** 18n);
@@ -181,10 +193,9 @@ describe("Full Strategy Lifecycle (Integration)", () => {
     console.log("    ✓ CARB token deployed and transfers working");
   });
 
-  // ── Summary ──────────────────────────────────────────────────────────────────
+  // ── Summary ────────────────────────────────────────────────────────────────
 
   it("Summary: vault state is clean after all users exit", async () => {
-    // Bob also withdraws
     const bobInfo = await vault.userInfo(bob.address);
     if (bobInfo.shares > 0n) {
       await vault.connect(bob).withdraw(bobInfo.shares);
@@ -192,9 +203,10 @@ describe("Full Strategy Lifecycle (Integration)", () => {
 
     const state = await vault.getVaultState();
     console.log("\n    ─── Final Vault State ───");
-    console.log(`    totalDeposited : $${Number(state.totalDeposited) / 1e6}`);
-    console.log(`    hedgeIsOpen    : ${state.hedgeIsOpen}`);
-    console.log(`    totalShares    : ${state.totalShares}`);
+    console.log(`    totalDeposited   : $${Number(state.totalDeposited) / 1e6}`);
+    console.log(`    hedgeIsOpen      : ${state.hedgeIsOpen}`);
+    console.log(`    totalShares      : ${state.totalShares}`);
+    console.log(`    spotAllocation   : $${Number(state.spotAllocationUsdc) / 1e6}`);
     console.log("    ─────────────────────────");
   });
 });

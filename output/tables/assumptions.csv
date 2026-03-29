@@ -1,0 +1,5 @@
+scenario,days,initial_capital_usd,eth_price_path,eth_entry_price,eth_drift,eth_volatility,lending_apy_bps,daily_funding_rate_bps,funding_noise_std_bps,spread_bps,collateral_pct,entry_cost_bps,maintenance_margin_bps
+Favorable,30,100000.0,flat,2000.0,0.0,0.6,500.0,5.0,0.0,15.0,0.2,5.0,500.0
+Neutral,30,100000.0,flat,2000.0,0.0,0.6,500.0,3.0,0.0,5.0,0.2,5.0,500.0
+Backwardation,30,100000.0,trend_down,2000.0,0.0,0.6,300.0,-2.0,0.0,-5.0,0.2,5.0,500.0
+GBM Volatile,30,100000.0,gbm,2000.0,0.1,0.6,500.0,2.0,1.5,5.0,0.2,5.0,500.0

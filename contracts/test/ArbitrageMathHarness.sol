@@ -8,6 +8,15 @@ import "../core/ArbitrageMath.sol";
 ///         contract functions so they can be called from TypeScript tests.
 ///         This file lives in contracts/test/ and is NEVER deployed to mainnet.
 contract ArbitrageMathHarness {
+
+    function calcSpotPnL(
+        uint256 spotAllocation,
+        uint256 entryPrice,
+        uint256 currentPrice
+    ) external pure returns (int256) {
+        return ArbitrageMath.calcSpotPnL(spotAllocation, entryPrice, currentPrice);
+    }
+
     function calcShortPricePnL(
         uint256 notional,
         uint256 entryPrice,
@@ -22,14 +31,6 @@ contract ArbitrageMathHarness {
         uint256 elapsedSeconds
     ) external pure returns (int256) {
         return ArbitrageMath.calcFundingPayment(notional, dailyFundingRateBps, elapsedSeconds);
-    }
-
-    function calcLendingYield(
-        uint256 principal,
-        uint256 lendingAPYBps,
-        uint256 elapsedSeconds
-    ) external pure returns (uint256) {
-        return ArbitrageMath.calcLendingYield(principal, lendingAPYBps, elapsedSeconds);
     }
 
     function calcMarginRatio(
@@ -48,11 +49,11 @@ contract ArbitrageMathHarness {
     }
 
     function calcCarryScore(
-        uint256 lendingAPYBps,
+        uint256 benchmarkRateBps,
         int256  dailyFundingRateBps,
         uint256 costBps
     ) external pure returns (int256) {
-        return ArbitrageMath.calcCarryScore(lendingAPYBps, dailyFundingRateBps, costBps);
+        return ArbitrageMath.calcCarryScore(benchmarkRateBps, dailyFundingRateBps, costBps);
     }
 
     function isCarryViable(
