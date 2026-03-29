@@ -1,2 +1,2 @@
 n_days,initial_capital,transaction_cost,total_spot_pnl,total_perp_pnl,net_delta_pnl,delta_residual_pct,total_funding_pnl,total_pnl,total_return_pct,ann_return_pct,daily_sharpe,hourly_sharpe,max_drawdown_usd
-95,10000.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,-5.122691521866235e+16,-5.0444341521946176e+17,0.0
+2279,10000.0,-1960.0,48191.14,-48029.64,161.5041,0.34,16883.17,15084.68,150.847,24.16,4.83,2.103,-925.43

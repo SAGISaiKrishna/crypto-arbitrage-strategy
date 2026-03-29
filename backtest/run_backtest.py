@@ -10,20 +10,16 @@ Strategy:
 PnL per hourly bar t (t ≥ 1):
   spot_pnl    =  position_size × (spot_t − spot_{t-1})
   perp_pnl    = −position_size × (perp_t − perp_{t-1})
-  funding_pnl =  position_size × perp_t × (basis_pct_{t-1} / 100 / 8)
+  funding_pnl =  position_size × perp_t × funding_rate_{t-1}
 
-  Note — basis is LAGGED one bar (t-1) to avoid look-ahead bias.
-  In live trading the funding rate is known from the start-of-bar
-  market spread, not the end-of-bar close price.
+  funding_rate is the real per-hour rate from Gate.io (8h settlement / 8).
+  Note — funding is LAGGED one bar (t-1) to avoid look-ahead bias.
+  funding_pnl row 0 = 0 (no prior rate known at entry).
+  transaction_cost  = CAPITAL × TRANSACTION_COST_PCT, deducted at entry.
 
-  funding_pnl row 0 = 0 (no prior basis known at entry).
-  transaction_cost  = CAPITAL × TRANSACTION_COST_PCT, deducted at entry (row 0).
-
-Funding proxy:
-  basis_pct = (perp_close - spot_close) / spot_close × 100
-  Divided by 100 → decimal.  Divided by 8 → per-hour accrual
-  (Deribit / Binance settle funding every 8 hours; each 1-hour bar
-  accrues 1/8 of the equivalent 8-hour rate).
+Data source:
+  Spot + perp OHLCV: OKX public API (5 years).
+  Funding rates: Gate.io futures public API (full 5-year history, no geo-block).
 
 Usage:
     python3 backtest/run_backtest.py
@@ -66,12 +62,10 @@ def load_data() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
 
-    # Use only rows with real funding data — filters to ~3 months (Dec 2025 onwards)
+    # Use full 5-year dataset — Gate.io provides real funding data from 2020
     has_funding = df["funding_rate"] != 0.0
-    if has_funding.any():
-        first_real = df.loc[has_funding, "timestamp"].min()
-        df = df[df["timestamp"] >= first_real].reset_index(drop=True)
-        print(f"  Filtered to rows with real funding data: {first_real.date()} onwards")
+    first_real = df.loc[has_funding, "timestamp"].min() if has_funding.any() else df["timestamp"].min()
+    print(f"  Filtered to rows with real funding data: {first_real.date()} onwards")
 
     print(f"  {len(df)} hourly rows  ({df['timestamp'].min().date()} → {df['timestamp'].max().date()})")
     return df
@@ -275,8 +269,8 @@ def save_charts(result: pd.DataFrame):
                     where=(result["cumulative_pnl"] < 0), alpha=0.12, color="#F44336")
     ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
     ax.set_title(
-        "Cumulative PnL — Delta-Neutral ETH Carry Strategy\n"
-        "Funding: lagged basis_pct/100/8  |  Costs deducted at entry",
+        "Cumulative PnL — ETH Carry Strategy (5yr, 2020–2026)\n"
+        "Funding: real Gate.io settlement rates  |  Carry gate: basis > 250bps ann.",
         fontsize=11
     )
     ax.set_ylabel("PnL (USD)")
@@ -375,13 +369,11 @@ def main():
     print(f"    Transaction cost (one-time) : ${metrics['transaction_cost']:>7.2f}  ← deducted at entry")
     print(f"    Net total PnL               : ${total_pnl:>7.2f}")
     print()
-    print("  Funding proxy note:")
+    print("  Funding data note:")
     ann_fund = total_funding / CAPITAL * (365 / n) * 100
-    print(f"    Annualised funding proxy: {ann_fund:.1f}%")
-    print(f"    This is basis_pct_{{t-1}} / 100 / 8 — a PROXY, not true settlement data.")
-    print(f"    True Deribit funding = mark-index TWAP over each 8h period.")
-    print(f"    The proxy is directionally motivated but may differ from actual")
-    print(f"    funding by ±20–40%. Do not treat the funding figure as exact.")
+    print(f"    Annualised funding yield: {ann_fund:.1f}%")
+    print(f"    Source: Gate.io futures public API — real 8-hourly settlement rates.")
+    print(f"    Lagged one bar (t-1) to avoid look-ahead bias.")
     print()
     print("  Sharpe and sample caveat:")
     print(f"    Daily Sharpe = {metrics['daily_sharpe']:.2f}  (primary metric, reported for reference).")

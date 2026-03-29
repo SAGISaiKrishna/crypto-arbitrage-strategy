@@ -32,8 +32,9 @@ RECENT_URL  = BASE_URL + "/api/v5/market/candles"
 # OKX only keeps ~3 months of funding history via public API.
 # Binance futures keeps 5+ years of funding history and is accessible
 # even when Binance spot is geo-blocked.
-FUNDING_URL     = BASE_URL + "/api/v5/public/funding-rate-history"   # fallback
-BINANCE_FUND_URL = "https://fapi.binance.com/fapi/v1/fundingRate"    # primary
+FUNDING_URL     = BASE_URL + "/api/v5/public/funding-rate-history"   # fallback (OKX ~3mo)
+BINANCE_FUND_URL = "https://fapi.binance.com/fapi/v1/fundingRate"    # geo-blocked in US
+GATEIO_FUND_URL  = "https://fx-api.gateio.ws/api/v4/futures/usdt/funding_rate"  # primary
 
 SPOT_ID     = "ETH-USDT"
 PERP_ID     = "ETH-USDT-SWAP"
@@ -113,8 +114,44 @@ def fetch_candles(inst_id: str, start_ms: int, end_ms: int) -> pd.DataFrame:
     return df[["timestamp","open","high","low","close","vol"]].copy()
 
 
+def fetch_funding_gateio(contract: str, start_s: int, end_s: int) -> pd.DataFrame:
+    """Fetch 8-hourly funding rates from Gate.io futures (5+ years of history)."""
+    rows    = []
+    current = start_s
+    chunk   = 1000 * 8 * 3600   # 1000 records × 8h each in seconds
+    print(f"  Fetching funding rates from Gate.io ({contract})...")
+
+    while current < end_s:
+        chunk_end = min(current + chunk, end_s)
+        params = {
+            "contract": contract,
+            "from":     current,
+            "to":       chunk_end,
+            "limit":    1000,
+        }
+        resp = requests.get(GATEIO_FUND_URL, params=params,
+                            headers={"Accept": "application/json"}, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data:
+            current = chunk_end + 1
+            time.sleep(SLEEP_S)
+            continue
+        rows.extend(data)
+        current = max(int(d["t"]) for d in data) + 1
+        print(f"    ... {len(rows):,} records so far", end="\r")
+        time.sleep(SLEEP_S)
+
+    print(f"    Total: {len(rows):,} funding records")
+    df = pd.DataFrame(rows)
+    df["timestamp"]    = pd.to_datetime(df["t"].astype(int), unit="s", utc=True)
+    df["funding_rate"] = df["r"].astype(float)
+    df = df.sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
+    return df[["timestamp", "funding_rate"]].copy()
+
+
 def fetch_funding_binance(symbol: str, start_ms: int, end_ms: int) -> pd.DataFrame:
-    """Fetch 8-hourly funding rates from Binance futures (5+ years of history)."""
+    """Fetch 8-hourly funding rates from Binance futures (geo-blocked in US)."""
     rows    = []
     current = start_ms
     print(f"  Fetching funding rates from Binance futures ({symbol})...")
@@ -180,14 +217,16 @@ def fetch_funding_okx(inst_id: str, start_ms: int, end_ms: int) -> pd.DataFrame:
 
 
 def fetch_funding(inst_id: str, start_ms: int, end_ms: int) -> pd.DataFrame:
-    """Try Binance futures first (5yr history); fall back to OKX if blocked."""
+    """Try Gate.io first (5yr history, not geo-blocked); fall back to OKX."""
+    start_s = start_ms // 1000
+    end_s   = end_ms   // 1000
     try:
-        df = fetch_funding_binance("ETHUSDT", start_ms, end_ms)
-        if len(df) > 500:   # Binance worked and has real history
+        df = fetch_funding_gateio("ETH_USDT", start_s, end_s)
+        if len(df) > 500:
             return df
-        print("    Binance returned limited data, trying OKX...")
+        print("    Gate.io returned limited data, trying OKX...")
     except Exception as e:
-        print(f"    Binance funding failed ({e}), falling back to OKX...")
+        print(f"    Gate.io funding failed ({e}), falling back to OKX...")
     return fetch_funding_okx(inst_id, start_ms, end_ms)
 
 
