@@ -65,6 +65,14 @@ def load_data() -> pd.DataFrame:
     df = pd.read_csv(path)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
+
+    # Use only rows with real funding data — filters to ~3 months (Dec 2025 onwards)
+    has_funding = df["funding_rate"] != 0.0
+    if has_funding.any():
+        first_real = df.loc[has_funding, "timestamp"].min()
+        df = df[df["timestamp"] >= first_real].reset_index(drop=True)
+        print(f"  Filtered to rows with real funding data: {first_real.date()} onwards")
+
     print(f"  {len(df)} hourly rows  ({df['timestamp'].min().date()} → {df['timestamp'].max().date()})")
     return df
 
@@ -75,46 +83,104 @@ def run_backtest(df: pd.DataFrame) -> pd.DataFrame:
     first_spot    = df["spot_price_close"].iloc[0]
     position_size = CAPITAL / first_spot        # ETH units, constant throughout
 
+    # Carry gate parameters (mirrors StrategyVault.sol)
+    BENCHMARK_BPS = 200    # 2% annual opportunity cost
+    COST_BPS      = 50     # 0.5% round-trip cost estimate
+    GATE_THRESHOLD_BPS = BENCHMARK_BPS + COST_BPS   # 250 bps minimum annual carry
+
     print(f"\nCapital         : ${CAPITAL:,.0f}")
     print(f"Position size   : {position_size:.6f} ETH  (@${first_spot:.2f})")
     print(f"Transaction cost: ${TRANSACTION_COST_USD:.2f}  ({TRANSACTION_COST_PCT*100:.2f}% of capital)")
-    print(f"Funding formula : basis_pct_{{t-1}} / 100 / 8  [LAGGED — no look-ahead]")
+    print(f"Funding formula : real OKX funding rate  [no proxy — actual settlement data]")
+    print(f"Carry gate      : annualised basis > {GATE_THRESHOLD_BPS} bps  (mirrors StrategyVault.sol)")
 
-    rows = []
+    # ── Gate: computed DAILY using 7-day rolling average basis ──────────────────
+    # Aggregating to daily first eliminates intraday noise and prevents
+    # excessive entries/exits that would be impossible in live trading.
+    df = df.copy()
+    df["date"] = df["timestamp"].dt.normalize()
+    daily_basis = (
+        df.groupby("date")["basis_pct"]
+        .mean()
+        .rename("daily_basis_pct")
+        .reset_index()
+    )
+    # 7-day rolling mean of daily basis — gate signal
+    daily_basis["basis_7d"] = daily_basis["daily_basis_pct"].rolling(7, min_periods=1).mean()
+    # Lagged one day — no look-ahead
+    daily_basis["basis_7d_lag"] = daily_basis["basis_7d"].shift(1).fillna(0.0)
+
+    # Build a per-date gate lookup: True = carry regime active
+    gate_map = {}
+    for _, drow in daily_basis.iterrows():
+        ann_carry = (drow["basis_7d_lag"] / 100.0) * 8760 * 10_000
+        gate_map[drow["date"]] = (ann_carry - GATE_THRESHOLD_BPS) > 0
+
+    rows          = []
+    in_position   = False
+    position_size = 0.0
+    capital       = CAPITAL
+    current_date  = None
+
     for i in range(len(df)):
-        row = df.iloc[i]
+        row  = df.iloc[i]
+        prev = df.iloc[i - 1] if i > 0 else row
 
-        if i == 0:
-            # Entry bar: no price PnL yet, deduct transaction cost.
-            spot_pnl    = 0.0
-            perp_pnl    = 0.0
-            funding_pnl = 0.0
-            tx_cost     = -TRANSACTION_COST_USD
-        else:
-            prev = df.iloc[i - 1]
+        this_date   = row["date"]
+        gate_open   = gate_map.get(this_date, False)
+        carry_score = (gate_map.get(this_date, False))   # bool for display
+
+        spot_pnl    = 0.0
+        perp_pnl    = 0.0
+        funding_pnl = 0.0
+        tx_cost     = 0.0
+
+        # Gate transitions only at the start of a new day
+        if this_date != current_date:
+            current_date = this_date
+            if not in_position and gate_open:
+                in_position   = True
+                position_size = capital / row["spot_price_close"]
+                tx_cost       = -TRANSACTION_COST_USD
+                capital      += tx_cost
+            elif in_position and not gate_open:
+                in_position   = False
+                position_size = 0.0
+                tx_cost       = -TRANSACTION_COST_USD
+                capital      += tx_cost
+
+        if in_position and i > 0:
             spot_pnl    =  position_size * (row["spot_price_close"] - prev["spot_price_close"])
             perp_pnl    = -position_size * (row["perp_price_close"] - prev["perp_price_close"])
-            # Funding uses PREVIOUS bar's basis (t-1) — no look-ahead.
-            lagged_basis = prev["basis_pct"]
-            funding_pnl  = position_size * row["perp_price_close"] * (lagged_basis / 100.0 / 8.0)
-            tx_cost      = 0.0
+            # Real OKX funding rate (per-hour decimal, settled every 8h)
+            funding_pnl = position_size * row["perp_price_close"] * prev["funding_rate"]
+            capital    +=  spot_pnl + perp_pnl + funding_pnl
 
         total_pnl = spot_pnl + perp_pnl + funding_pnl + tx_cost
 
         rows.append({
-            "timestamp":    row["timestamp"],
-            "spot_price":   row["spot_price_close"],
-            "perp_price":   row["perp_price_close"],
-            "basis_pct":    row["basis_pct"],
-            "spot_pnl":     spot_pnl,
-            "perp_pnl":     perp_pnl,
-            "funding_pnl":  funding_pnl,
-            "tx_cost":      tx_cost,
-            "total_pnl":    total_pnl,
+            "timestamp":       row["timestamp"],
+            "spot_price":      row["spot_price_close"],
+            "perp_price":      row["perp_price_close"],
+            "basis_pct":       row["basis_pct"],
+            "carry_score_bps": 1.0 if gate_open else -1.0,
+            "in_position":     in_position,
+            "spot_pnl":        spot_pnl,
+            "perp_pnl":        perp_pnl,
+            "funding_pnl":     funding_pnl,
+            "tx_cost":         tx_cost,
+            "total_pnl":       total_pnl,
+            "capital":         capital,
         })
 
     result = pd.DataFrame(rows)
     result["cumulative_pnl"] = result["total_pnl"].cumsum()
+
+    days_in  = result["in_position"].sum() / 24
+    days_out = (len(result) - result["in_position"].sum()) / 24
+    n_trades = (result["tx_cost"] != 0).sum()
+    print(f"Days in position: {days_in:.0f}  |  Days out (cash): {days_out:.0f}  |  Trades: {n_trades}")
+
     return result, position_size
 
 
@@ -153,7 +219,7 @@ def compute_metrics(df: pd.DataFrame, result: pd.DataFrame) -> dict:
     return {
         "n_days":             n_days,
         "initial_capital":    CAPITAL,
-        "transaction_cost":   round(-TRANSACTION_COST_USD, 2),
+        "transaction_cost":   round(result["tx_cost"].sum(), 2),
         "total_spot_pnl":     round(total_spot, 2),
         "total_perp_pnl":     round(total_perp, 2),
         "net_delta_pnl":      round(net_delta, 4),

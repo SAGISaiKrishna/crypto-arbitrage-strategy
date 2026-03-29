@@ -74,80 +74,99 @@ def run_backtest(data: pd.DataFrame, config: BacktestConfig = None) -> pd.DataFr
     entry_cost     = notional * config.entry_cost_pct
 
     # Track entry perp price for margin ratio calculation
-    entry_perp = df["perp_close"].iloc[0]
+    entry_perp  = df["perp_close"].iloc[0]
+    in_position = False   # carry gate: only trade when carry score > 0
 
     rows = []
 
     for i in range(len(df)):
-        row             = df.iloc[i]
-        date            = row["date"]
-        spot_price      = row["spot_close"]
-        perp_price      = row["perp_close"]
-        log_basis_bps   = row["log_basis_bps_mean"]
+        row           = df.iloc[i]
+        date          = row["date"]
+        spot_price    = row["spot_close"]
+        perp_price    = row["perp_close"]
+        log_basis_bps = row["log_basis_bps_mean"]
+
+        # Carry score uses PREVIOUS day's basis (lagged, no look-ahead)
+        if i == 0:
+            prev_log_basis = log_basis_bps
+        else:
+            prev_log_basis = df["log_basis_bps_mean"].iloc[i - 1]
+
+        carry_score_bps = prev_log_basis * 365 - benchmark_bps - cost_bps
+        is_viable       = carry_score_bps > 0
+
+        spot_pnl       = 0.0
+        perp_pnl       = 0.0
+        net_delta_pnl  = 0.0
+        funding_income = 0.0
+        benchmark_cost = 0.0
+        carry_pnl      = 0.0
+        total_daily    = 0.0
 
         if i == 0:
-            # Day 0: entry — pay execution cost, no PnL yet
-            spot_pnl       = 0.0
-            perp_pnl       = 0.0
-            net_delta_pnl  = 0.0
-            funding_income = 0.0
-            benchmark_cost = 0.0
-            carry_pnl      = -entry_cost
-            total_daily    = -entry_cost
+            # Day 0: decide whether to enter based on carry score
+            if is_viable:
+                in_position = True
+                entry_perp  = perp_price
+                carry_pnl   = -entry_cost
+                total_daily = -entry_cost
         else:
             prev_spot = df["spot_close"].iloc[i - 1]
             prev_perp = df["perp_close"].iloc[i - 1]
 
-            # Spot leg: long ETH (USDC allocation tracks spot price)
-            spot_pnl = notional * (spot_price / prev_spot - 1.0)
+            if not in_position and is_viable:
+                # Enter: pay entry cost, reset perp entry price
+                in_position = True
+                entry_perp  = perp_price
+                carry_pnl   = -entry_cost
+                total_daily = -entry_cost
 
-            # Perp leg: short ETH perpetual (mirror of spot, inverted)
-            perp_pnl = -notional * (perp_price / prev_perp - 1.0)
+            elif in_position and not is_viable:
+                # Exit: pay exit cost, close position
+                in_position = False
+                carry_pnl   = -entry_cost
+                total_daily = -entry_cost
 
-            # Net carry captured: basis compression as perp converges to spot
-            # In contango (perp > spot), perp tends to fall toward spot → net > 0
-            net_delta_pnl = spot_pnl + perp_pnl
+            elif in_position:
+                # Active position: earn carry
+                spot_pnl = notional * (spot_price / prev_spot - 1.0)
+                perp_pnl = -notional * (perp_price / prev_perp - 1.0)
 
-            # Benchmark opportunity cost of capital
-            benchmark_cost = capital * benchmark_daily
+                net_delta_pnl  = spot_pnl + perp_pnl
+                benchmark_cost = capital * benchmark_daily
+                funding_income = net_delta_pnl
+                carry_pnl      = net_delta_pnl - benchmark_cost
+                total_daily    = carry_pnl
 
-            # Funding income = net carry from price convergence
-            funding_income = net_delta_pnl
-
-            # Strategy carry: what you earn vs what you could have earned risk-free
-            carry_pnl = net_delta_pnl - benchmark_cost
-
-            # Total daily PnL (spot + perp nearly cancel; residual = basis carry)
-            total_daily = carry_pnl
+            # else: not in position, carry not viable → sit in cash, pnl = 0
 
         capital += total_daily
 
-        # Margin ratio: equity / notional for the short perp leg
-        # Unrealised perp PnL = notional × (entry_perp − perp_price) / entry_perp
-        unrealised_perp = notional * (entry_perp - perp_price) / entry_perp
-        equity          = collateral + unrealised_perp
-        margin_ratio    = max(equity / notional, 0.0)
-
-        # Carry score (annualised basis minus costs, mirrors on-chain formula)
-        carry_score_bps = log_basis_bps * 365 - benchmark_bps - cost_bps
-        is_viable       = carry_score_bps > 0
+        # Margin ratio: only meaningful when in position
+        if in_position:
+            unrealised_perp = notional * (entry_perp - perp_price) / entry_perp
+            equity          = collateral + unrealised_perp
+            margin_ratio    = max(equity / notional, 0.0)
+        else:
+            margin_ratio = 1.0   # full margin, not deployed
 
         rows.append({
             "date":                   date,
             "eth_price":              spot_price,
             "perp_price":             perp_price,
-            "daily_funding_rate_bps": log_basis_bps,   # daily basis as carry proxy
+            "daily_funding_rate_bps": log_basis_bps,
             "spot_pnl":               spot_pnl,
             "perp_pnl":               perp_pnl,
             "net_delta_pnl":          net_delta_pnl,
-            "funding_income":         funding_income if i > 0 else 0.0,
-            "benchmark_cost":         benchmark_cost if i > 0 else 0.0,
+            "funding_income":         funding_income,
+            "benchmark_cost":         benchmark_cost,
             "carry_pnl":              carry_pnl,
             "total_pnl_daily":        total_daily,
             "capital":                capital,
             "margin_ratio":           margin_ratio,
             "is_viable":              is_viable,
             "carry_score_bps":        carry_score_bps,
+            "in_position":            in_position,
         })
 
     result = pd.DataFrame(rows)
