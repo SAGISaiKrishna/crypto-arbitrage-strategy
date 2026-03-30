@@ -101,14 +101,20 @@ async function initContracts() {
 
 async function loadAddresses() {
   const network = await provider.getNetwork();
-  const path = network.chainId === 11155111n
-    ? "./contracts/addresses.sepolia.json"
-    : "./contracts/addresses.local.json";
-  const response = await fetch(path);
+  if (network.chainId === 11155111n) {
+    return {
+      MockUSDC:             "0x84EAb608016e21E4618c63B01F7b3b043F4f457e",
+      ArbitrageToken:       "0xd2E7bA891e0Ecd142695d04e8Ed79e0C4947922F",
+      ChainlinkPriceOracle: "0x27768a80Fb849F6c1bB941C8de62F417Cd968e35",
+      MockPerpEngine:       "0x478832D03495390E47aFD238A9bA11414096A452",
+      StrategyVault:        "0x036EA2E331994a04d853B54Ad19D05524eC5b399"
+    };
+  }
+  // local hardhat
+  const response = await fetch("./contracts/addresses.local.json");
   if (!response.ok) {
     throw new Error(
-      `Could not load addresses file: ${path}. ` +
-      `Create it locally after deployment, or use the example file as a guide.`
+      `Could not load addresses file. Deploy locally first and generate addresses.local.json.`
     );
   }
   return response.json();
