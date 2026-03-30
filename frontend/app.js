@@ -103,11 +103,11 @@ async function loadAddresses() {
   const network = await provider.getNetwork();
   if (network.chainId === 11155111n) {
     return {
-      MockUSDC:             "0x84EAb608016e21E4618c63B01F7b3b043F4f457e",
-      ArbitrageToken:       "0xd2E7bA891e0Ecd142695d04e8Ed79e0C4947922F",
-      ChainlinkPriceOracle: "0x27768a80Fb849F6c1bB941C8de62F417Cd968e35",
-      MockPerpEngine:       "0x478832D03495390E47aFD238A9bA11414096A452",
-      StrategyVault:        "0x036EA2E331994a04d853B54Ad19D05524eC5b399"
+      MockUSDC:             "0xb9673DCAF951f9Ce73bb489b2765C34B5491E69b",
+      ArbitrageToken:       "0x3a7f55F0b17Df14929911FCfFf160711A704ea3B",
+      ChainlinkPriceOracle: "0x95B922854a4E2837783B694c255d3238aaFd1A6C",
+      MockPerpEngine:       "0xBcAa128AC3334E8d4C17C59327A71B2fEbFB5cEb",
+      StrategyVault:        "0x520B783BAA0f95Dbc0C7e958d96B014dB6027bB4"
     };
   }
   // local hardhat
