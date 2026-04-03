@@ -5,6 +5,9 @@ delta-neutral long-spot / short-perpetual ETH carry strategy.
 
 ---
 
+## 🚀 Live App
+👉 [Open the Vercel App][(https://crypto-arbitrage-strategy.vercel.app/)]
+
 ## What This Project Does
 
 The strategy runs two equal-notional legs simultaneously:
