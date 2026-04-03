@@ -1,4 +1,4 @@
-# Delta-Neutral ETH Carry Strategy
+# Harvesting Alpha: Delta-Neutral Funding Rate Arbitrage on ETH Perpetual Futures
 
 A final project combining a Python backtest and an on-chain proof-of-concept for a
 delta-neutral long-spot / short-perpetual ETH carry strategy.
